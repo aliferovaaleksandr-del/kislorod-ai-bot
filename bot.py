@@ -137,6 +137,15 @@ ROLE_PROMPTS = {
 
 
 async def ask_yandex_gpt(system_prompt, conversation):
+    # --- DEBUG: проверяем переменные окружения ---
+    logger.info(">>> ask_yandex_gpt called")
+    logger.info(f">>> YANDEX_API_KEY set: {bool(YANDEX_API_KEY)}, starts: {str(YANDEX_API_KEY)[:8] if YANDEX_API_KEY else 'NONE'}")
+    logger.info(f">>> YANDEX_FOLDER_ID: {YANDEX_FOLDER_ID}")
+
+    if not YANDEX_API_KEY or not YANDEX_FOLDER_ID:
+        logger.error(">>> MISSING ENV VARS! Set YANDEX_API_KEY and YANDEX_FOLDER_ID in Railway.")
+        return "Ошибка конфигурации: не заданы переменные окружения YANDEX_API_KEY / YANDEX_FOLDER_ID."
+
     messages = [{"role": "system", "text": system_prompt}]
     for msg in conversation[-20:]:
         messages.append({"role": msg["role"], "text": msg["text"]})
@@ -156,21 +165,44 @@ async def ask_yandex_gpt(system_prompt, conversation):
         "Content-Type": "application/json",
     }
 
+    logger.info(f">>> modelUri: gpt://{YANDEX_FOLDER_ID}/yandexgpt/latest")
+
     try:
+        logger.info(">>> Sending request to llm.api.cloud.yandex.net ...")
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 "https://llm.api.cloud.yandex.net/foundationModels/v1/completion",
                 json=payload,
                 headers=headers,
             )
-            data = response.json()
-            if response.status_code == 200:
-                return data["result"]["alternatives"][0]["message"]["text"]
-            else:
-                logger.error(f"YandexGPT error {response.status_code}: {data}")
-                return "Ошибка AI. Попробуй снова."
+        logger.info(f">>> Yandex HTTP status: {response.status_code}")
+        logger.info(f">>> Yandex response body: {response.text[:500]}")
+
+        data = response.json()
+
+        if response.status_code == 200:
+            return data["result"]["alternatives"][0]["message"]["text"]
+        elif response.status_code == 401:
+            logger.error(">>> 401 Unauthorized — неверный YANDEX_API_KEY")
+            return "Ошибка авторизации (401). Проверь YANDEX_API_KEY."
+        elif response.status_code == 403:
+            logger.error(">>> 403 Forbidden — нет прав или не активирован биллинг/сервис")
+            return "Нет доступа (403). Проверь права сервисного аккаунта и биллинг."
+        elif response.status_code == 404:
+            logger.error(">>> 404 Not Found — неверный YANDEX_FOLDER_ID или модель")
+            return "Модель не найдена (404). Проверь YANDEX_FOLDER_ID."
+        else:
+            logger.error(f">>> Unexpected status {response.status_code}: {data}")
+            return f"Ошибка AI ({response.status_code}). Попробуй снова."
+
+    except httpx.ConnectError as e:
+        logger.error(f">>> ConnectError — Railway блокирует соединение с Яндексом: {e}")
+        return "Не удалось подключиться к Яндекс API. Возможно, Railway блокирует соединение."
+    except httpx.TimeoutException as e:
+        logger.error(f">>> TimeoutException: {e}")
+        return "Яндекс API не ответил за 30 секунд. Попробуй снова."
     except Exception as e:
-        logger.error(f"Request failed: {e}")
+        logger.error(f">>> EXCEPTION {type(e).__name__}: {e}")
         return "Не удалось получить ответ. Попробуй снова."
 
 
@@ -244,6 +276,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_text:
         return
 
+    logger.info(f">>> handle_message: text='{user_text[:50]}', role={context.user_data.get('role')}")
+
     role_key = context.user_data.get("role")
     if not role_key:
         await update.message.reply_text(
@@ -289,6 +323,11 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
+    logger.info("=== KISLOROD AI Bot starting ===")
+    logger.info(f"=== BOT_TOKEN set: {bool(BOT_TOKEN)} ===")
+    logger.info(f"=== YANDEX_API_KEY set: {bool(YANDEX_API_KEY)} ===")
+    logger.info(f"=== YANDEX_FOLDER_ID: {YANDEX_FOLDER_ID} ===")
+
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
@@ -296,7 +335,7 @@ def main():
     app.add_handler(CommandHandler("clear", clear_command))
     app.add_handler(CallbackQueryHandler(select_role))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    logger.info("KISLOROD AI Bot is running...")
+    logger.info("=== Bot is running, waiting for messages... ===")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
