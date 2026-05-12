@@ -2,7 +2,7 @@ import os
 import sys
 import subprocess
 
-subprocess.check_call([sys.executable, "-m", "pip", "install", "python-telegram-bot==20.7", "httpx==0.26.0", "-q"])
+subprocess.check_call([sys.executable, "-m", "pip", "install", "python-telegram-bot==20.7", "-q"])
 
 import logging
 import httpx
@@ -25,113 +25,113 @@ logger = logging.getLogger(__name__)
 ROLE_PROMPTS = {
     "actor": {
         "system": (
-            "Ty - opytnyy teatralnyy i kinoakter-nastavnik studii KISLOROD PRODAKSHEN. "
-            "Pomogaesh akteram gotovitsya k rolyam: razbivaesh harakter personazha, biografiyu, "
-            "motivaciyu, fizicheskie i emocional'nye sostoyaniya. "
-            "Dlya primerika obraza predlagaesh detalnoe opisanie vneshnego vida, kostyuma, grima. "
-            "Kogda akter opisyvaet video-probu slovami - daesh konkretnyy razbor: chto silno, "
-            "chto slabo, kak uluchshit. "
-            "Otvechay na russkom yazyke. Bud vdokhnovlyayushchim i tochnym."
+            "Ты — опытный театральный и киноактёр-наставник студии КИСЛОРОД ПРОДАКШЕН. "
+            "Помогаешь актёрам готовиться к ролям: разбираешь характер персонажа, биографию, "
+            "мотивацию, физические и эмоциональные состояния. "
+            "Для примерки образа предлагаешь детальное описание внешнего вида, костюма, грима. "
+            "Когда актёр описывает видео-пробу словами — даёшь конкретный разбор: что сильно, "
+            "что слабо, как улучшить. "
+            "Отвечай на русском языке. Будь вдохновляющим и точным."
         ),
         "welcome": (
-            "Privet, akter!\n\n"
-            "Ya tvoy lichnyy AI-nastavnik studii KISLOROD PRODAKSHEN.\n\n"
-            "Chem mogu pomoch:\n"
-            "- Podgotovka k roli\n"
-            "- Primerika obraza\n"
-            "- Razbor video-prob\n"
-            "- Rabota s tekstom sceny\n\n"
-            "Nad kakoy rolyu ty seychas rabotaesh?"
+            "Привет, актёр!\n\n"
+            "Я твой личный AI-наставник студии КИСЛОРОД ПРОДАКШЕН.\n\n"
+            "Чем могу помочь:\n"
+            "- Подготовка к роли\n"
+            "- Примерка образа\n"
+            "- Разбор видео-проб\n"
+            "- Работа с текстом сцены\n\n"
+            "Над какой ролью ты сейчас работаешь?"
         )
     },
     "director": {
         "system": (
-            "Ty - kreativnyy rezhisser-nastavnik studii KISLOROD PRODAKSHEN. "
-            "Pomogaesh rezhisseram razrabatyvat koncepcii, raskadrovki, vizualnyy stil. "
-            "Predlagaesh idei dlya scen, perehodov, rakursov, cvetovykh resheniy. "
-            "Otvechay na russkom yazyke. Bud derzkim i kinematograficheski myslyashchim."
+            "Ты — креативный режиссёр-наставник студии КИСЛОРОД ПРОДАКШЕН. "
+            "Помогаешь режиссёрам разрабатывать концепции, раскадровки, визуальный стиль. "
+            "Предлагаешь идеи для сцен, переходов, ракурсов, цветовых решений. "
+            "Отвечай на русском языке. Будь дерзким и кинематографически мыслящим."
         ),
         "welcome": (
-            "Privet, rezhisser!\n\n"
-            "Ya tvoy AI-assistent dlya rezhisserskoy raboty.\n\n"
-            "Pomogu s:\n"
-            "- Koncepciya i vizualnyy stil\n"
-            "- Raskadrovka i plan semok\n"
-            "- Cvetovaya palitra i atmosfera\n"
-            "- Rezhisserskiy scenariy\n\n"
-            "Kakoy proekt v rabote?"
+            "Привет, режиссёр!\n\n"
+            "Я твой AI-ассистент для режиссёрской работы.\n\n"
+            "Помогу с:\n"
+            "- Концепция и визуальный стиль\n"
+            "- Раскадровка и план съёмок\n"
+            "- Цветовая палитра и атмосфера\n"
+            "- Режиссёрский сценарий\n\n"
+            "Какой проект в работе?"
         )
     },
     "screenwriter": {
         "system": (
-            "Ty - scenarist studii KISLOROD PRODAKSHEN. "
-            "Pomogaesh pisat scenarii, dialogi, sinopsisy. "
-            "Razrabatyvaesh haraktery personazhey i ikh arki razvitiya. "
-            "Predlagaesh struktury istoriy, konflikty, povoroty. "
-            "Pishesh zhivye kinematograficheskie dialogi. "
-            "Otvechay na russkom yazyke. Bud literaturnym i glubokim."
+            "Ты — сценарист студии КИСЛОРОД ПРОДАКШЕН. "
+            "Помогаешь писать сценарии, диалоги, синопсисы. "
+            "Разрабатываешь характеры персонажей и их арки развития. "
+            "Предлагаешь структуры историй, конфликты, повороты. "
+            "Пишешь живые кинематографические диалоги. "
+            "Отвечай на русском языке. Будь литературным и глубоким."
         ),
         "welcome": (
-            "Privet, scenarist!\n\n"
-            "Ya tvoy AI-soavtor dlya raboty nad istoriyami.\n\n"
-            "Sozdadim vmeste:\n"
-            "- Sinopsis i struktura istorii\n"
-            "- Haraktery personazhey\n"
-            "- Zhivye dialogi i sceny\n"
-            "- Tritment i pitch-dokument\n\n"
-            "Kakaya ideya trebuet voploshcheniya?"
+            "Привет, сценарист!\n\n"
+            "Я твой AI-соавтор для работы над историями.\n\n"
+            "Создадим вместе:\n"
+            "- Синопсис и структура истории\n"
+            "- Характеры персонажей\n"
+            "- Живые диалоги и сцены\n"
+            "- Тритмент и питч-документ\n\n"
+            "Какая идея требует воплощения?"
         )
     },
     "producer": {
         "system": (
-            "Ty - produuser studii KISLOROD PRODAKSHEN. "
-            "Pomogaesh s pitchingom, byudzhetami, tajm-menedzhmentom proizvodstva. "
-            "Razrabatyvaesh tritmenty, lukbuki, prezentacii dlya investorov. "
-            "Otvechay na russkom yazyke. Bud chetkim i strukturirovannym."
+            "Ты — продюсер студии КИСЛОРОД ПРОДАКШЕН. "
+            "Помогаешь с питчингом, бюджетами, тайм-менеджментом производства. "
+            "Разрабатываешь тритменты, лукбуки, презентации для инвесторов. "
+            "Отвечай на русском языке. Будь чётким и структурированным."
         ),
         "welcome": (
-            "Privet, produuser!\n\n"
-            "Ya tvoy AI-assistent dlya proizvodstvennykh zadach.\n\n"
-            "Pomogu s:\n"
-            "- Pitch i prezentaciya dlya investorov\n"
-            "- Struktura byudzheta\n"
-            "- Proizvodstvennyy plan\n"
-            "- Tritment i lukbuk\n\n"
-            "Chto za proekt?"
+            "Привет, продюсер!\n\n"
+            "Я твой AI-ассистент для производственных задач.\n\n"
+            "Помогу с:\n"
+            "- Питч и презентация для инвесторов\n"
+            "- Структура бюджета\n"
+            "- Производственный план\n"
+            "- Тритмент и лукбук\n\n"
+            "Что за проект?"
         )
     },
     "client": {
         "system": (
-            "Ty - klientskiy menedzher studii KISLOROD PRODAKSHEN. "
-            "Pomogaesh zakazchikam sformulirovat TZ, brif, kreativnuyu koncepciyu. "
-            "Sozdaesh strukturirovannye koncept-dokumenty i prezentacii. "
-            "Kontakty studii: actorsashapotapov@gmail.com | @actorsashapotapov. "
-            "Otvechay na russkom yazyke. Bud druzhelyubnym i professionalnym."
+            "Ты — клиентский менеджер студии КИСЛОРОД ПРОДАКШЕН. "
+            "Помогаешь заказчикам сформулировать ТЗ, бриф, креативную концепцию. "
+            "Создаёшь структурированные концепт-документы и презентации. "
+            "Контакты студии: actorsashapotapov@gmail.com | @actorsashapotapov. "
+            "Отвечай на русском языке. Будь дружелюбным и профессиональным."
         ),
         "welcome": (
-            "Privet!\n\n"
-            "Ya pomogu voploshchit vashu ideyu v gotovyy proekt.\n\n"
-            "Vmeste sozdadim:\n"
-            "- Tekhnicheskoe zadanie i brief\n"
-            "- Kreativnaya koncepciya\n"
-            "- Prezentaciya proekta\n"
-            "- Kommunikacionnaya strategiya\n\n"
-            "Rasskazhite o vashey zadache."
+            "Привет!\n\n"
+            "Я помогу воплотить вашу идею в готовый проект.\n\n"
+            "Вместе создадим:\n"
+            "- Техническое задание и бриф\n"
+            "- Креативная концепция\n"
+            "- Презентация проекта\n"
+            "- Коммуникационная стратегия\n\n"
+            "Расскажите о вашей задаче."
         )
     },
     "general": {
         "system": (
-            "Ty - AI-assistent studii KISLOROD PRODAKSHEN - tvorcheskoy AI-studii, "
-            "sozdayushchey multfilmy, klipy, serialy i reklamu. "
-            "Pomogaesh vsem: akteram, rezhisseram, scenaristam, produuseram i zakazchikam. "
-            "Sayt: https://aliferovaaleksandr-del.github.io/kislorod-production/ "
+            "Ты — AI-ассистент студии КИСЛОРОД ПРОДАКШЕН — творческой AI-студии, "
+            "создающей мультфильмы, клипы, сериалы и рекламу. "
+            "Помогаешь всем: актёрам, режиссёрам, сценаристам, продюсерам и заказчикам. "
+            "Сайт: https://aliferovaaleksandr-del.github.io/kislorod-production/ "
             "Email: actorsashapotapov@gmail.com | Telegram: @actorsashapotapov. "
-            "Otvechay na russkom yazyke."
+            "Отвечай на русском языке."
         ),
         "welcome": (
-            "Dobro pozhalovat v KISLOROD PRODAKSHEN!\n\n"
-            "Ya AI-assistent tvorcheskoy studii novogo pokoleniya.\n\n"
-            "Vyberi rol nizhe - i ya nastroysya specialno dlya tebya!"
+            "Добро пожаловать в КИСЛОРОД ПРОДАКШЕН!\n\n"
+            "Я AI-ассистент творческой студии нового поколения.\n\n"
+            "Выбери роль ниже — и я настроюсь специально для тебя!"
         )
     }
 }
@@ -169,25 +169,25 @@ async def ask_yandex_gpt(system_prompt, conversation):
                 return data["result"]["alternatives"][0]["message"]["text"]
             else:
                 logger.error(f"YandexGPT error {response.status_code}: {data}")
-                return "Oshibka AI. Poprobuy snova."
+                return "Ошибка AI. Попробуй снова."
     except Exception as e:
         logger.error(f"Request failed: {e}")
-        return "Ne udalos poluchit otvet. Poprobuy snova."
+        return "Не удалось получить ответ. Попробуй снова."
 
 
 def role_keyboard():
     keyboard = [
         [
-            InlineKeyboardButton("Akter", callback_data="role_actor"),
-            InlineKeyboardButton("Rezhisser", callback_data="role_director"),
+            InlineKeyboardButton("🎭 Актёр", callback_data="role_actor"),
+            InlineKeyboardButton("🎬 Режиссёр", callback_data="role_director"),
         ],
         [
-            InlineKeyboardButton("Scenarist", callback_data="role_screenwriter"),
-            InlineKeyboardButton("Produuser", callback_data="role_producer"),
+            InlineKeyboardButton("✍️ Сценарист", callback_data="role_screenwriter"),
+            InlineKeyboardButton("💼 Продюсер", callback_data="role_producer"),
         ],
         [
-            InlineKeyboardButton("Zakazchik", callback_data="role_client"),
-            InlineKeyboardButton("Obshchiy", callback_data="role_general"),
+            InlineKeyboardButton("🤝 Заказчик", callback_data="role_client"),
+            InlineKeyboardButton("🌐 Общий", callback_data="role_general"),
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -195,18 +195,18 @@ def role_keyboard():
 
 def back_keyboard():
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("Smenit rol", callback_data="change_role"),
-        InlineKeyboardButton("Ochistit chat", callback_data="clear_chat"),
+        InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
+        InlineKeyboardButton("🗑 Очистить чат", callback_data="clear_chat"),
     ]])
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text(
-        "KISLOROD PRODUCTION - AI ASSISTENT\n\n"
-        "Tvorcheskaya AI-studiya novogo pokoleniya.\n"
-        "Multfilmy, Klipy, Serialy, Reklama\n\n"
-        "Vyberi svoyu rol:",
+        "🎬 КИСЛОРОД ПРОДАКШЕН — AI АССИСТЕНТ\n\n"
+        "Творческая AI-студия нового поколения.\n"
+        "Мультфильмы • Клипы • Сериалы • Реклама\n\n"
+        "Выбери свою роль:",
         reply_markup=role_keyboard()
     )
 
@@ -218,12 +218,12 @@ async def select_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action == "change_role":
         context.user_data.clear()
-        await query.edit_message_text("Vyberi novuyu rol:", reply_markup=role_keyboard())
+        await query.edit_message_text("Выбери новую роль:", reply_markup=role_keyboard())
         return
 
     if action == "clear_chat":
         context.user_data["history"] = []
-        await query.answer("Istoriya ochistchena", show_alert=True)
+        await query.answer("История очищена ✅", show_alert=True)
         return
 
     role_key = action.replace("role_", "")
@@ -243,7 +243,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     role_key = context.user_data.get("role")
     if not role_key:
-        await update.message.reply_text("Snachala vyberi rol:", reply_markup=role_keyboard())
+        await update.message.reply_text("Сначала выбери роль:", reply_markup=role_keyboard())
         return
 
     role = ROLE_PROMPTS[role_key]
@@ -261,24 +261,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "KISLOROD AI - Spravka\n\n"
-        "/start - Nachat\n"
-        "/role - Smenit rol\n"
-        "/clear - Ochistit istoriyu\n"
-        "/help - Spravka\n\n"
-        "Kontakty:\n"
-        "actorsashapotapov@gmail.com\n"
-        "@actorsashapotapov"
+        "🎬 КИСЛОРОД AI — Справка\n\n"
+        "/start — Начать\n"
+        "/role — Сменить роль\n"
+        "/clear — Очистить историю\n"
+        "/help — Справка\n\n"
+        "Контакты:\n"
+        "📧 actorsashapotapov@gmail.com\n"
+        "💬 @actorsashapotapov"
     )
 
 
 async def role_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Vyberi rol:", reply_markup=role_keyboard())
+    await update.message.reply_text("Выбери роль:", reply_markup=role_keyboard())
 
 
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["history"] = []
-    await update.message.reply_text("Istoriya ochistchena!")
+    await update.message.reply_text("История очищена ✅")
 
 
 def main():
