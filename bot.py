@@ -3,8 +3,12 @@ import logging
 import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ContextTypes, filters
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters,
 )
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -13,7 +17,7 @@ YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
@@ -37,7 +41,7 @@ ROLE_PROMPTS = {
             "- Разбор видео-проб\n"
             "- Работа с текстом сцены\n\n"
             "Над какой ролью ты сейчас работаешь?"
-        )
+        ),
     },
     "director": {
         "system": (
@@ -55,7 +59,7 @@ ROLE_PROMPTS = {
             "- Цветовая палитра и атмосфера\n"
             "- Режиссёрский сценарий\n\n"
             "Какой проект в работе?"
-        )
+        ),
     },
     "screenwriter": {
         "system": (
@@ -75,7 +79,7 @@ ROLE_PROMPTS = {
             "- Живые диалоги и сцены\n"
             "- Тритмент и питч-документ\n\n"
             "Какая идея требует воплощения?"
-        )
+        ),
     },
     "producer": {
         "system": (
@@ -93,7 +97,7 @@ ROLE_PROMPTS = {
             "- Производственный план\n"
             "- Тритмент и лукбук\n\n"
             "Что за проект?"
-        )
+        ),
     },
     "client": {
         "system": (
@@ -112,7 +116,7 @@ ROLE_PROMPTS = {
             "- Презентация проекта\n"
             "- Коммуникационная стратегия\n\n"
             "Расскажите о вашей задаче."
-        )
+        ),
     },
     "general": {
         "system": (
@@ -127,8 +131,8 @@ ROLE_PROMPTS = {
             "Добро пожаловать в КИСЛОРОД ПРОДАКШЕН!\n\n"
             "Я AI-ассистент творческой студии нового поколения.\n\n"
             "Выбери роль ниже — и я настроюсь специально для тебя!"
-        )
-    }
+        ),
+    },
 }
 
 
@@ -142,14 +146,14 @@ async def ask_yandex_gpt(system_prompt, conversation):
         "completionOptions": {
             "stream": False,
             "temperature": 0.7,
-            "maxTokens": 1000
+            "maxTokens": 1000,
         },
-        "messages": messages
+        "messages": messages,
     }
 
     headers = {
         "Authorization": f"Api-Key {YANDEX_API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
     try:
@@ -157,7 +161,7 @@ async def ask_yandex_gpt(system_prompt, conversation):
             response = await client.post(
                 "https://llm.api.cloud.yandex.net/foundationModels/v1/completion",
                 json=payload,
-                headers=headers
+                headers=headers,
             )
             data = response.json()
             if response.status_code == 200:
@@ -183,16 +187,20 @@ def role_keyboard():
         [
             InlineKeyboardButton("🤝 Заказчик", callback_data="role_client"),
             InlineKeyboardButton("🌐 Общий", callback_data="role_general"),
-        ]
+        ],
     ]
     return InlineKeyboardMarkup(keyboard)
 
 
 def back_keyboard():
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
-        InlineKeyboardButton("🗑 Очистить чат", callback_data="clear_chat"),
-    ]])
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
+                InlineKeyboardButton("🗑 Очистить чат", callback_data="clear_chat"),
+            ]
+        ]
+    )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -202,7 +210,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Творческая AI-студия нового поколения.\n"
         "Мультфильмы • Клипы • Сериалы • Реклама\n\n"
         "Выбери свою роль:",
-        reply_markup=role_keyboard()
+        reply_markup=role_keyboard(),
     )
 
 
@@ -238,13 +246,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     role_key = context.user_data.get("role")
     if not role_key:
-        await update.message.reply_text("Сначала выбери роль:", reply_markup=role_keyboard())
+        await update.message.reply_text(
+            "Сначала выбери роль:", reply_markup=role_keyboard()
+        )
         return
 
     role = ROLE_PROMPTS[role_key]
     history = context.user_data.get("history", [])
 
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id, action="typing"
+    )
 
     history.append({"role": "user", "text": user_text})
     response = await ask_yandex_gpt(role["system"], history)
@@ -291,7 +303,7 @@ def main():
 if __name__ == "__main__":
     main()
 
-
+worker: python bot.py
 
 python-telegram-bot==20.7
 httpx>=0.27.0,<0.28.0
