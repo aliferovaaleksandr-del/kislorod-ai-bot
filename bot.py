@@ -6,17 +6,17 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, filters
 )
- 
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
- 
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
- 
+
 ROLE_PROMPTS = {
     "actor": {
         "system": (
@@ -130,13 +130,13 @@ ROLE_PROMPTS = {
         )
     }
 }
- 
- 
+
+
 async def ask_yandex_gpt(system_prompt, conversation):
     messages = [{"role": "system", "text": system_prompt}]
     for msg in conversation[-20:]:
         messages.append({"role": msg["role"], "text": msg["text"]})
- 
+
     payload = {
         "modelUri": f"gpt://{YANDEX_FOLDER_ID}/yandexgpt/latest",
         "completionOptions": {
@@ -146,12 +146,12 @@ async def ask_yandex_gpt(system_prompt, conversation):
         },
         "messages": messages
     }
- 
+
     headers = {
         "Authorization": f"Api-Key {YANDEX_API_KEY}",
         "Content-Type": "application/json"
     }
- 
+
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
@@ -168,8 +168,8 @@ async def ask_yandex_gpt(system_prompt, conversation):
     except Exception as e:
         logger.error(f"Request failed: {e}")
         return "Ne udalos poluchit otvet. Poprobuy snova."
- 
- 
+
+
 def role_keyboard():
     keyboard = [
         [
@@ -186,15 +186,15 @@ def role_keyboard():
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
- 
- 
+
+
 def back_keyboard():
     return InlineKeyboardMarkup([[
         InlineKeyboardButton("Smenit rol", callback_data="change_role"),
         InlineKeyboardButton("Ochistit chat", callback_data="clear_chat"),
     ]])
- 
- 
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text(
@@ -204,56 +204,56 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Vyberi svoyu rol:",
         reply_markup=role_keyboard()
     )
- 
- 
+
+
 async def select_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     action = query.data
- 
+
     if action == "change_role":
         context.user_data.clear()
         await query.edit_message_text("Vyberi novuyu rol:", reply_markup=role_keyboard())
         return
- 
+
     if action == "clear_chat":
         context.user_data["history"] = []
         await query.answer("Istoriya ochistchena", show_alert=True)
         return
- 
+
     role_key = action.replace("role_", "")
     if role_key not in ROLE_PROMPTS:
         return
- 
+
     context.user_data["role"] = role_key
     context.user_data["history"] = []
     role = ROLE_PROMPTS[role_key]
     await query.edit_message_text(role["welcome"], reply_markup=back_keyboard())
- 
- 
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text.strip()
     if not user_text:
         return
- 
+
     role_key = context.user_data.get("role")
     if not role_key:
         await update.message.reply_text("Snachala vyberi rol:", reply_markup=role_keyboard())
         return
- 
+
     role = ROLE_PROMPTS[role_key]
     history = context.user_data.get("history", [])
- 
+
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
- 
+
     history.append({"role": "user", "text": user_text})
     response = await ask_yandex_gpt(role["system"], history)
     history.append({"role": "assistant", "text": response})
     context.user_data["history"] = history[-30:]
- 
+
     await update.message.reply_text(response, reply_markup=back_keyboard())
- 
- 
+
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "KISLOROD AI - Spravka\n\n"
@@ -265,17 +265,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "actorsashapotapov@gmail.com\n"
         "@actorsashapotapov"
     )
- 
- 
+
+
 async def role_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Vyberi rol:", reply_markup=role_keyboard())
- 
- 
+
+
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["history"] = []
     await update.message.reply_text("Istoriya ochistchena!")
- 
- 
+
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -286,98 +286,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     logger.info("KISLOROD AI Bot is running...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
- 
- 
+
+
 if __name__ == "__main__":
     main()
-
-worker: python bot.py
-
-# ✦ KISLOROD PRODUCTION — AI Telegram Bot
-
-AI-ассистент творческой студии для актёров, режиссёров, сценаристов, продюсеров и заказчиков.
-
-**Бот:** [@KISLORODAIBot](https://t.me/KISLORODAIBot)  
-**Сайт:** [kislorod-production](https://aliferovaaleksandr-del.github.io/kislorod-production/)
-
----
-
-## 🚀 Быстрый запуск (локально)
-
-```bash
-# 1. Установи зависимости
-pip install -r requirements.txt
-
-# 2. Создай файл .env
-cp .env.example .env
-# Заполни YANDEX_FOLDER_ID в .env (смотри ниже)
-
-# 3. Запусти бота
-python bot.py
-```
-
----
-
-## ⚙️ Настройка YANDEX_FOLDER_ID
-
-1. Зайди на [console.cloud.yandex.ru](https://console.cloud.yandex.ru)
-2. Выбери свой каталог (папку)
-3. Скопируй **"Идентификатор каталога"** (выглядит как `b1gXXXXXXXXX`)
-4. Вставь в `.env` → `YANDEX_FOLDER_ID=b1gXXXXXXXXX`
-
----
-
-## ☁️ Деплой на Railway (бесплатно)
-
-1. Зайди на [railway.app](https://railway.app) → New Project → Deploy from GitHub
-2. Подключи этот репозиторий
-3. Добавь переменные окружения в Settings → Variables:
-   - `BOT_TOKEN` = твой токен бота
-   - `YANDEX_API_KEY` = твой Яндекс ключ
-   - `YANDEX_FOLDER_ID` = идентификатор каталога
-4. Railway автоматически запустит бота через `Procfile`
-
-## ☁️ Деплой на Render (бесплатно)
-
-1. Зайди на [render.com](https://render.com) → New → Background Worker
-2. Подключи GitHub репозиторий
-3. Build Command: `pip install -r requirements.txt`
-4. Start Command: `python bot.py`
-5. Добавь Environment Variables (те же 3 переменные)
-
----
-
-## 🎭 Роли бота
-
-| Роль | Что умеет |
-|------|-----------|
-| 🎭 Актёр | Подготовка к роли, примерка образа, разбор видео-проб |
-| 🎬 Режиссёр | Концепция, раскадровка, визуальный стиль |
-| ✍️ Сценарист | Синопсис, диалоги, структура истории, тритмент |
-| 💼 Продюсер | Питч, бюджет, производственный план |
-| 🏢 Заказчик | ТЗ, бриф, креативная концепция, презентация |
-| 💬 Общий | Все вопросы о студии |
-
----
-
-## 📁 Структура
-
-```
-kislorod-bot/
-├── bot.py           # Основной код бота
-├── requirements.txt # Зависимости Python
-├── Procfile         # Для Railway/Render
-├── .env.example     # Пример переменных окружения
-└── README.md        # Эта инструкция
-```
-
----
-
-## 📞 Контакты студии
-
-- ✉️ actorsashapotapov@gmail.com  
-- ✈️ @actorsashapotapov  
-- 🤖 @KISLORODAIBot
-
-python-telegram-bot==20.7
-httpx==0.26.0
