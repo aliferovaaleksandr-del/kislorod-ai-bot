@@ -1,4 +1,9 @@
 import os
+import sys
+import subprocess
+
+subprocess.check_call([sys.executable, "-m", "pip", "install", "python-telegram-bot==20.7", "httpx==0.26.0", "-q"])
+
 import logging
 import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
