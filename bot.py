@@ -1,8 +1,30 @@
+Проблема в том, что pip устанавливает python-telegram-bot==20.7, но в системе уже есть старая версия библиотеки, которая не перезаписывается. Нужно принудительно переустановить с --force-reinstall и зафиксировать точную версию.
+Замени строку установки на:
+python
+subprocess.check_call([
+    sys.executable, "-m", "pip", "install",
+    "--force-reinstall",
+    "--no-deps",
+    "python-telegram-bot==20.7",
+    "httpx>=0.27.0,<0.28.0",
+    "anyio>=3.7.1",
+    "-q"
+])
+Но самый надёжный способ — вот полный bot.py:
+python
 import os
 import sys
 import subprocess
 
-subprocess.check_call([sys.executable, "-m", "pip", "install", "python-telegram-bot==20.7", "-q"])
+# Принудительная переустановка совместимых версий
+subprocess.check_call([
+    sys.executable, "-m", "pip", "install",
+    "--force-reinstall",
+    "python-telegram-bot==20.7",
+    "httpx>=0.27.0,<0.28.0",
+    "-q",
+    "--root-user-action=ignore"
+])
 
 import logging
 import httpx
