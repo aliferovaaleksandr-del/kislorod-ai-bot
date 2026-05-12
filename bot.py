@@ -300,7 +300,5 @@ def main():
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
-if __name__ == "__main__":python-telegram-bot==20.7
-httpx>=0.27.0,<0.28.0
-
+if __name__ == "__main__":
     main()
