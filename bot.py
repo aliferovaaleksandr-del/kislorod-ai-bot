@@ -6,8 +6,6 @@ from telegram import (
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
 )
 from telegram.ext import (
     Application,
@@ -33,31 +31,25 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────
-# МЕНЮ
+# МЕНЮ (только InlineKeyboard)
 # ─────────────────────────────────────────────
 
-MENU_BUTTONS = {
-    "🎭 Актёр": "actor",
-    "🎬 Режиссёр": "director",
-    "✍️ Сценарист": "screenwriter",
-    "💼 Продюсер": "producer",
-    "🤝 Заказчик": "client",
-    "🌐 Общий": "general",
-}
-
-
 def main_menu_keyboard():
-    return ReplyKeyboardMarkup(
+    return InlineKeyboardMarkup([
         [
-            [KeyboardButton("🎭 Актёр"), KeyboardButton("🎬 Режиссёр"), KeyboardButton("✍️ Сценарист")],
-            [KeyboardButton("💼 Продюсер"), KeyboardButton("🤝 Заказчик"), KeyboardButton("🌐 Общий")],
+            InlineKeyboardButton("🎭 Актёр", callback_data="role_actor"),
+            InlineKeyboardButton("🎬 Режиссёр", callback_data="role_director"),
+            InlineKeyboardButton("✍️ Сценарист", callback_data="role_screenwriter"),
         ],
-        resize_keyboard=True,
-        is_persistent=True,
-    )
+        [
+            InlineKeyboardButton("💼 Продюсер", callback_data="role_producer"),
+            InlineKeyboardButton("🤝 Заказчик", callback_data="role_client"),
+            InlineKeyboardButton("🌐 Общий", callback_data="role_general"),
+        ],
+    ])
 
 
-def back_keyboard():
+def chat_keyboard():
     return InlineKeyboardMarkup([[
         InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
         InlineKeyboardButton("🗑 Очистить чат", callback_data="clear_chat"),
@@ -83,10 +75,10 @@ ROLE_PROMPTS = {
             "🎭 Привет, актёр!\n\n"
             "Я твой личный AI-наставник студии КИСЛОРОД ПРОДАКШЕН.\n\n"
             "Чем могу помочь:\n"
-            "- Подготовка к роли\n"
-            "- Примерка образа\n"
-            "- Разбор видео-проб\n"
-            "- Работа с текстом сцены\n\n"
+            "— Подготовка к роли\n"
+            "— Примерка образа\n"
+            "— Разбор видео-проб\n"
+            "— Работа с текстом сцены\n\n"
             "Над какой ролью ты сейчас работаешь?"
         ),
     },
@@ -101,10 +93,10 @@ ROLE_PROMPTS = {
             "🎬 Привет, режиссёр!\n\n"
             "Я твой AI-ассистент для режиссёрской работы.\n\n"
             "Помогу с:\n"
-            "- Концепция и визуальный стиль\n"
-            "- Раскадровка и план съёмок\n"
-            "- Цветовая палитра и атмосфера\n"
-            "- Режиссёрский сценарий\n\n"
+            "— Концепция и визуальный стиль\n"
+            "— Раскадровка и план съёмок\n"
+            "— Цветовая палитра и атмосфера\n"
+            "— Режиссёрский сценарий\n\n"
             "Какой проект в работе?"
         ),
     },
@@ -121,10 +113,10 @@ ROLE_PROMPTS = {
             "✍️ Привет, сценарист!\n\n"
             "Я твой AI-соавтор для работы над историями.\n\n"
             "Создадим вместе:\n"
-            "- Синопсис и структура истории\n"
-            "- Характеры персонажей\n"
-            "- Живые диалоги и сцены\n"
-            "- Тритмент и питч-документ\n\n"
+            "— Синопсис и структура истории\n"
+            "— Характеры персонажей\n"
+            "— Живые диалоги и сцены\n"
+            "— Тритмент и питч-документ\n\n"
             "Какая идея требует воплощения?"
         ),
     },
@@ -139,10 +131,10 @@ ROLE_PROMPTS = {
             "💼 Привет, продюсер!\n\n"
             "Я твой AI-ассистент для производственных задач.\n\n"
             "Помогу с:\n"
-            "- Питч и презентация для инвесторов\n"
-            "- Структура бюджета\n"
-            "- Производственный план\n"
-            "- Тритмент и лукбук\n\n"
+            "— Питч и презентация для инвесторов\n"
+            "— Структура бюджета\n"
+            "— Производственный план\n"
+            "— Тритмент и лукбук\n\n"
             "Что за проект?"
         ),
     },
@@ -158,10 +150,10 @@ ROLE_PROMPTS = {
             "🤝 Привет!\n\n"
             "Я помогу воплотить вашу идею в готовый проект.\n\n"
             "Вместе создадим:\n"
-            "- Техническое задание и бриф\n"
-            "- Креативная концепция\n"
-            "- Презентация проекта\n"
-            "- Коммуникационная стратегия\n\n"
+            "— Техническое задание и бриф\n"
+            "— Креативная концепция\n"
+            "— Презентация проекта\n"
+            "— Коммуникационная стратегия\n\n"
             "Расскажите о вашей задаче."
         ),
     },
@@ -177,7 +169,7 @@ ROLE_PROMPTS = {
         "welcome": (
             "🌐 Добро пожаловать в КИСЛОРОД ПРОДАКШЕН!\n\n"
             "Я AI-ассистент творческой студии нового поколения.\n\n"
-            "Используй кнопки меню внизу чтобы выбрать роль 👇"
+            "Выбери свою роль:"
         ),
     },
 }
@@ -349,36 +341,47 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎬 КИСЛОРОД ПРОДАКШЕН — AI АССИСТЕНТ\n\n"
         "Творческая AI-студия нового поколения.\n"
         "Мультфильмы • Клипы • Сериалы • Реклама\n\n"
-        "Выбери свою роль в меню снизу 👇",
+        "Выбери свою роль:",
         reply_markup=main_menu_keyboard(),
     )
 
 
-async def select_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     action = query.data
 
     if action == "change_role":
         context.user_data.clear()
-        await query.edit_message_text("Выбери роль в меню снизу 👇")
+        await query.edit_message_text(
+            "🎬 КИСЛОРОД ПРОДАКШЕН — AI АССИСТЕНТ\n\nВыбери свою роль:",
+            reply_markup=main_menu_keyboard(),
+        )
         return
 
     if action == "clear_chat":
         context.user_data["history"] = []
-        await query.answer("История очищена ✅", show_alert=True)
+        role_key = context.user_data.get("role")
+        if role_key and role_key in ROLE_PROMPTS:
+            await query.edit_message_text(
+                ROLE_PROMPTS[role_key]["welcome"] + "\n\n✅ История очищена",
+                reply_markup=chat_keyboard(),
+            )
+        else:
+            await query.answer("История очищена ✅", show_alert=True)
         return
 
-    role_key = action.replace("role_", "")
-    if role_key not in ROLE_PROMPTS:
+    if action.startswith("role_"):
+        role_key = action.replace("role_", "")
+        if role_key not in ROLE_PROMPTS:
+            return
+        context.user_data["role"] = role_key
+        context.user_data["history"] = []
+        await query.edit_message_text(
+            ROLE_PROMPTS[role_key]["welcome"],
+            reply_markup=chat_keyboard(),
+        )
         return
-
-    context.user_data["role"] = role_key
-    context.user_data["history"] = []
-    await query.edit_message_text(
-        ROLE_PROMPTS[role_key]["welcome"],
-        reply_markup=back_keyboard(),
-    )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -386,22 +389,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_text:
         return
 
-    # Нажата кнопка меню
-    if user_text in MENU_BUTTONS:
-        role_key = MENU_BUTTONS[user_text]
-        context.user_data["role"] = role_key
-        context.user_data["history"] = []
-        await update.message.reply_text(
-            ROLE_PROMPTS[role_key]["welcome"],
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-
-    # Обычное сообщение
     role_key = context.user_data.get("role")
     if not role_key:
         await update.message.reply_text(
-            "Выбери роль в меню снизу 👇",
+            "Выбери роль, чтобы начать:",
             reply_markup=main_menu_keyboard(),
         )
         return
@@ -412,13 +403,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response = await ask_yandex_gpt(ROLE_PROMPTS[role_key]["system"], history)
     history.append({"role": "assistant", "text": response})
     context.user_data["history"] = history[-30:]
-    await update.message.reply_text(response, reply_markup=main_menu_keyboard())
+    await update.message.reply_text(response, reply_markup=chat_keyboard())
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎬 КИСЛОРОД AI — Справка\n\n"
-        "/start — Начать\n"
+        "/start — Начать и выбрать роль\n"
         "/clear — Очистить историю\n"
         "/post_now — Опубликовать посты сейчас (тест)\n"
         "/help — Справка\n\n"
@@ -431,14 +422,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["history"] = []
-    await update.message.reply_text("История очищена ✅", reply_markup=main_menu_keyboard())
+    await update.message.reply_text(
+        "✅ История очищена. Выбери роль:",
+        reply_markup=main_menu_keyboard(),
+    )
 
 
 async def post_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Ищу свежие новости и генерирую посты...")
     await generate_and_post(context.bot, CHANNEL_KISLOROD, "kislorod")
     await generate_and_post(context.bot, CHANNEL_ACTOR, "actor")
-    await update.message.reply_text("✅ Посты опубликованы в оба канала!", reply_markup=main_menu_keyboard())
+    await update.message.reply_text("✅ Посты опубликованы в оба канала!")
 
 
 # ─────────────────────────────────────────────
@@ -458,7 +452,7 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("clear", clear_command))
     app.add_handler(CommandHandler("post_now", post_now_command))
-    app.add_handler(CallbackQueryHandler(select_role))
+    app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Расписание (UTC, Москва = UTC+3)
@@ -470,7 +464,7 @@ def main():
     app.job_queue.run_daily(job_actor, time=time(7, 0))
     app.job_queue.run_daily(job_actor, time=time(16, 0))
 
-    logger.info("=== Bot running with persistent menu & NewsAPI autoposting ===")
+    logger.info("=== Bot running with InlineKeyboard menu & NewsAPI autoposting ===")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
