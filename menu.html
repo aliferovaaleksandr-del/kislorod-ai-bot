@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>КИСЛОРОД — Меню</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Unbounded:wght@300;400;600;700&family=Mulish:wght@300;400;500&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0d0a14;
+    --bg2: #13101e;
+    --card: #1a1528;
+    --card-hover: #221d35;
+    --border: rgba(160, 100, 255, 0.15);
+    --border-hover: rgba(160, 100, 255, 0.45);
+    --purple: #a855f7;
+    --pink: #ec4899;
+    --glow: rgba(168, 85, 247, 0.3);
+    --text: #f0eaf8;
+    --text-muted: rgba(240, 234, 248, 0.45);
+  }
+
+  html, body {
+    min-height: 100vh;
+    background: var(--bg);
+    font-family: 'Mulish', sans-serif;
+    color: var(--text);
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    top: -30%;
+    left: -20%;
+    width: 70%;
+    height: 70%;
+    background: radial-gradient(ellipse, rgba(120, 40, 200, 0.18) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  body::after {
+    content: '';
+    position: fixed;
+    bottom: -20%;
+    right: -10%;
+    width: 50%;
+    height: 50%;
+    background: radial-gradient(ellipse, rgba(236, 72, 153, 0.12) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .wrap {
+    position: relative;
+    z-index: 1;
+    padding: 24px 16px 32px;
+    max-width: 480px;
+    margin: 0 auto;
+  }
+
+  .header {
+    text-align: center;
+    margin-bottom: 28px;
+    animation: fadeDown 0.5s ease both;
+  }
+
+  .logo {
+    font-family: 'Unbounded', sans-serif;
+    font-size: 11px;
+    font-weight: 300;
+    letter-spacing: 0.25em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .title {
+    font-family: 'Unbounded', sans-serif;
+    font-size: 20px;
+    font-weight: 600;
+    background: linear-gradient(135deg, #d8b4fe, #ec4899);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    line-height: 1.2;
+    margin-bottom: 6px;
+  }
+
+  .subtitle {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-weight: 300;
+    letter-spacing: 0.05em;
+  }
+
+  .label {
+    font-family: 'Unbounded', sans-serif;
+    font-size: 9px;
+    font-weight: 400;
+    letter-spacing: 0.2em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    padding-left: 2px;
+    animation: fadeDown 0.5s 0.1s ease both;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 18px 14px 16px;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    position: relative;
+    overflow: hidden;
+    animation: fadeUp 0.5s ease both;
+  }
+
+  .card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, rgba(168,85,247,0.08), rgba(236,72,153,0.05));
+    opacity: 0;
+    transition: opacity 0.25s;
+    border-radius: inherit;
+  }
+
+  .card:active {
+    transform: scale(0.96);
+    border-color: var(--border-hover);
+    background: var(--card-hover);
+  }
+
+  .card:active::before { opacity: 1; }
+
+  .card:nth-child(1) { animation-delay: 0.12s; }
+  .card:nth-child(2) { animation-delay: 0.18s; }
+  .card:nth-child(3) { animation-delay: 0.24s; }
+  .card:nth-child(4) { animation-delay: 0.30s; }
+  .card:nth-child(5) { animation-delay: 0.36s; }
+  .card:nth-child(6) { animation-delay: 0.42s; }
+
+  .card-icon {
+    font-size: 28px;
+    margin-bottom: 10px;
+    display: block;
+    line-height: 1;
+  }
+
+  .card-name {
+    font-family: 'Unbounded', sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: 0.02em;
+    margin-bottom: 4px;
+  }
+
+  .card-desc {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-weight: 300;
+    line-height: 1.4;
+  }
+
+  .card-arrow {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    width: 18px;
+    height: 18px;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    color: var(--text-muted);
+    transition: all 0.25s;
+  }
+
+  .card:active .card-arrow {
+    border-color: var(--purple);
+    color: var(--purple);
+  }
+
+  .divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border), transparent);
+    margin: 20px 0 16px;
+    animation: fadeUp 0.5s 0.45s ease both;
+  }
+
+  .footer {
+    text-align: center;
+    animation: fadeUp 0.5s 0.5s ease both;
+  }
+
+  .footer-text {
+    font-size: 10px;
+    color: var(--text-muted);
+    letter-spacing: 0.08em;
+  }
+
+  .dot {
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    background: var(--purple);
+    border-radius: 50%;
+    margin: 0 6px;
+    vertical-align: middle;
+    box-shadow: 0 0 6px var(--glow);
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  .flash {
+    animation: flash 0.3s ease;
+  }
+
+  @keyframes fadeDown {
+    from { opacity: 0; transform: translateY(-12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.5; transform: scale(0.8); }
+  }
+
+  @keyframes flash {
+    0%   { background: var(--card-hover); }
+    50%  { background: rgba(168,85,247,0.25); }
+    100% { background: var(--card-hover); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="header">
+    <div class="logo">KISLOROD PRODUCTION</div>
+    <div class="title">AI АССИСТЕНТ</div>
+    <div class="subtitle">Выбери свою роль</div>
+  </div>
+
+  <div class="label">• Роли</div>
+
+  <div class="grid">
+    <div class="card" onclick="selectRole('actor', this)">
+      <div class="card-arrow">↗</div>
+      <span class="card-icon">🎭</span>
+      <div class="card-name">Актёр</div>
+      <div class="card-desc">Подготовка к роли, образ, пробы</div>
+    </div>
+    <div class="card" onclick="selectRole('director', this)">
+      <div class="card-arrow">↗</div>
+      <span class="card-icon">🎬</span>
+      <div class="card-name">Режиссёр</div>
+      <div class="card-desc">Концепция, раскадровка, стиль</div>
+    </div>
+    <div class="card" onclick="selectRole('screenwriter', this)">
+      <div class="card-arrow">↗</div>
+      <span class="card-icon">✍️</span>
+      <div class="card-name">Сценарист</div>
+      <div class="card-desc">Сценарий, диалоги, синопсис</div>
+    </div>
+    <div class="card" onclick="selectRole('producer', this)">
+      <div class="card-arrow">↗</div>
+      <span class="card-icon">💼</span>
+      <div class="card-name">Продюсер</div>
+      <div class="card-desc">Питч, бюджет, производство</div>
+    </div>
+    <div class="card" onclick="selectRole('client', this)">
+      <div class="card-arrow">↗</div>
+      <span class="card-icon">🤝</span>
+      <div class="card-name">Заказчик</div>
+      <div class="card-desc">ТЗ, бриф, концепция проекта</div>
+    </div>
+    <div class="card" onclick="selectRole('general', this)">
+      <div class="card-arrow">↗</div>
+      <span class="card-icon">🌐</span>
+      <div class="card-name">Общий</div>
+      <div class="card-desc">Любые вопросы по студии</div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="footer">
+    <span class="footer-text">КИСЛОРОД ПРОДАКШЕН</span>
+    <span class="dot"></span>
+    <span class="footer-text">AI STUDIO</span>
+  </div>
+
+</div>
+
+<script>
+  const tg = window.Telegram?.WebApp;
+  if (tg) {
+    tg.ready();
+    tg.expand();
+    tg.setHeaderColor('#0d0a14');
+    tg.setBackgroundColor('#0d0a14');
+  }
+
+  const names = {
+    actor: '🎭 Актёр',
+    director: '🎬 Режиссёр',
+    screenwriter: '✍️ Сценарист',
+    producer: '💼 Продюсер',
+    client: '🤝 Заказчик',
+    general: '🌐 Общий',
+  };
+
+  function selectRole(role, el) {
+    el.classList.add('flash');
+    setTimeout(() => {
+      if (tg) {
+        tg.sendData(role);
+      } else {
+        alert('Выбрано: ' + names[role]);
+      }
+    }, 280);
+  }
+</script>
+</body>
+</html>
