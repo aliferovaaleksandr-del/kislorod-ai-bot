@@ -1,9 +1,8 @@
 import os
 import logging
 import httpx
-import asyncio
 from datetime import time
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -28,6 +27,52 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ─────────────────────────────────────────────
+# ПОСТОЯННОЕ МЕНЮ СНИЗУ
+# ─────────────────────────────────────────────
+
+MENU_BUTTONS = {
+    "🎭 Актёр": "actor",
+    "🎬 Режиссёр": "director",
+    "✍️ Сценарист": "screenwriter",
+    "💼 Продюсер": "producer",
+    "🤝 Заказчик": "client",
+    "🌐 Общий": "general",
+}
+
+def main_menu_keyboard():
+    """Постоянная клавиатура снизу экрана."""
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("🎭 Актёр"), KeyboardButton("🎬 Режиссёр"), KeyboardButton("✍️ Сценарист")],
+            [KeyboardButton("💼 Продюсер"), KeyboardButton("🤝 Заказчик"), KeyboardButton("🌐 Общий")],
+        ],
+        resize_keyboard=True,
+        persistent=True,
+    )
+
+def inline_role_keyboard():
+    """Инлайн-кнопки для выбора роли (используется при /start)."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎭 Актёр", callback_data="role_actor"),
+         InlineKeyboardButton("🎬 Режиссёр", callback_data="role_director")],
+        [InlineKeyboardButton("✍️ Сценарист", callback_data="role_screenwriter"),
+         InlineKeyboardButton("💼 Продюсер", callback_data="role_producer")],
+        [InlineKeyboardButton("🤝 Заказчик", callback_data="role_client"),
+         InlineKeyboardButton("🌐 Общий", callback_data="role_general")],
+    ])
+
+def back_keyboard():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
+        InlineKeyboardButton("🗑 Очистить чат", callback_data="clear_chat"),
+    ]])
+
+
+# ─────────────────────────────────────────────
+# РОЛИ
+# ─────────────────────────────────────────────
+
 ROLE_PROMPTS = {
     "actor": {
         "system": (
@@ -40,7 +85,7 @@ ROLE_PROMPTS = {
             "Отвечай на русском языке. Будь вдохновляющим и точным."
         ),
         "welcome": (
-            "Привет, актёр!\n\n"
+            "🎭 Привет, актёр!\n\n"
             "Я твой личный AI-наставник студии КИСЛОРОД ПРОДАКШЕН.\n\n"
             "Чем могу помочь:\n"
             "- Подготовка к роли\n"
@@ -58,7 +103,7 @@ ROLE_PROMPTS = {
             "Отвечай на русском языке. Будь дерзким и кинематографически мыслящим."
         ),
         "welcome": (
-            "Привет, режиссёр!\n\n"
+            "🎬 Привет, режиссёр!\n\n"
             "Я твой AI-ассистент для режиссёрской работы.\n\n"
             "Помогу с:\n"
             "- Концепция и визуальный стиль\n"
@@ -78,7 +123,7 @@ ROLE_PROMPTS = {
             "Отвечай на русском языке. Будь литературным и глубоким."
         ),
         "welcome": (
-            "Привет, сценарист!\n\n"
+            "✍️ Привет, сценарист!\n\n"
             "Я твой AI-соавтор для работы над историями.\n\n"
             "Создадим вместе:\n"
             "- Синопсис и структура истории\n"
@@ -96,7 +141,7 @@ ROLE_PROMPTS = {
             "Отвечай на русском языке. Будь чётким и структурированным."
         ),
         "welcome": (
-            "Привет, продюсер!\n\n"
+            "💼 Привет, продюсер!\n\n"
             "Я твой AI-ассистент для производственных задач.\n\n"
             "Помогу с:\n"
             "- Питч и презентация для инвесторов\n"
@@ -115,7 +160,7 @@ ROLE_PROMPTS = {
             "Отвечай на русском языке. Будь дружелюбным и профессиональным."
         ),
         "welcome": (
-            "Привет!\n\n"
+            "🤝 Привет!\n\n"
             "Я помогу воплотить вашу идею в готовый проект.\n\n"
             "Вместе создадим:\n"
             "- Техническое задание и бриф\n"
@@ -135,66 +180,48 @@ ROLE_PROMPTS = {
             "Отвечай на русском языке."
         ),
         "welcome": (
-            "Добро пожаловать в КИСЛОРОД ПРОДАКШЕН!\n\n"
+            "🌐 Добро пожаловать в КИСЛОРОД ПРОДАКШЕН!\n\n"
             "Я AI-ассистент творческой студии нового поколения.\n\n"
-            "Выбери роль ниже — и я настроюсь специально для тебя!"
+            "Используй кнопки меню внизу чтобы выбрать роль!"
         ),
     },
 }
 
 
 # ─────────────────────────────────────────────
-# NEWSAPI — ПОЛУЧЕНИЕ СВЕЖИХ НОВОСТЕЙ
+# NEWSAPI
 # ─────────────────────────────────────────────
 
 async def fetch_news(query: str, language: str = "ru", page_size: int = 5) -> str:
-    """Получает свежие новости через NewsAPI."""
     if not NEWS_API_KEY:
-        logger.error("NEWS_API_KEY не задан")
         return ""
-
     url = "https://newsapi.org/v2/everything"
-    params = {
-        "q": query,
-        "language": language,
-        "sortBy": "publishedAt",
-        "pageSize": page_size,
-        "apiKey": NEWS_API_KEY,
-    }
-
+    params = {"q": query, "language": language, "sortBy": "publishedAt",
+               "pageSize": page_size, "apiKey": NEWS_API_KEY}
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.get(url, params=params)
-
         if response.status_code == 200:
             articles = response.json().get("articles", [])
-
-            # Если нет русских новостей — пробуем английские
             if not articles:
                 params["language"] = "en"
                 async with httpx.AsyncClient(timeout=15.0) as client:
                     response = await client.get(url, params=params)
                 articles = response.json().get("articles", [])
-
             news_text = ""
-            for i, article in enumerate(articles[:5], 1):
-                title = article.get("title", "")
-                description = article.get("description", "")
-                source = article.get("source", {}).get("name", "")
+            for i, a in enumerate(articles[:5], 1):
+                title = a.get("title", "")
+                desc = a.get("description", "")
+                source = a.get("source", {}).get("name", "")
                 if title and title != "[Removed]":
                     news_text += f"{i}. {title}"
-                    if description and description != "[Removed]":
-                        news_text += f"\n   {description}"
+                    if desc and desc != "[Removed]":
+                        news_text += f"\n   {desc}"
                     if source:
                         news_text += f"\n   Источник: {source}"
                     news_text += "\n\n"
-
-            logger.info(f">>> Fetched {len(articles)} articles for: {query}")
             return news_text.strip()
-        else:
-            logger.error(f">>> NewsAPI error {response.status_code}: {response.text[:200]}")
-            return ""
-
+        return ""
     except Exception as e:
         logger.error(f">>> NewsAPI exception: {e}")
         return ""
@@ -207,31 +234,22 @@ async def fetch_news(query: str, language: str = "ru", page_size: int = 5) -> st
 async def ask_yandex_gpt(system_prompt: str, conversation: list) -> str:
     if not YANDEX_API_KEY or not YANDEX_FOLDER_ID:
         return "Ошибка конфигурации: не заданы переменные окружения."
-
     messages = [{"role": "system", "text": system_prompt}]
     for msg in conversation[-20:]:
         messages.append({"role": msg["role"], "text": msg["text"]})
-
     payload = {
         "modelUri": f"gpt://{YANDEX_FOLDER_ID}/yandexgpt/latest",
         "completionOptions": {"stream": False, "temperature": 0.7, "maxTokens": 1000},
         "messages": messages,
     }
-    headers = {
-        "Authorization": f"Api-Key {YANDEX_API_KEY}",
-        "Content-Type": "application/json",
-    }
-
+    headers = {"Authorization": f"Api-Key {YANDEX_API_KEY}", "Content-Type": "application/json"}
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 "https://llm.api.cloud.yandex.net/foundationModels/v1/completion",
-                json=payload,
-                headers=headers,
+                json=payload, headers=headers,
             )
-        logger.info(f">>> Yandex HTTP status: {response.status_code}")
         data = response.json()
-
         if response.status_code == 200:
             return data["result"]["alternatives"][0]["message"]["text"]
         elif response.status_code == 401:
@@ -242,9 +260,7 @@ async def ask_yandex_gpt(system_prompt: str, conversation: list) -> str:
             return "Модель не найдена (404). Проверь YANDEX_FOLDER_ID."
         else:
             return f"Ошибка AI ({response.status_code}). Попробуй снова."
-
-    except httpx.ConnectError as e:
-        logger.error(f">>> ConnectError: {e}")
+    except httpx.ConnectError:
         return "Не удалось подключиться к Яндекс API."
     except httpx.TimeoutException:
         return "Яндекс API не ответил за 30 секунд."
@@ -258,82 +274,58 @@ async def ask_yandex_gpt(system_prompt: str, conversation: list) -> str:
 # ─────────────────────────────────────────────
 
 async def generate_kislorod_post() -> str:
-    """Генерирует пост для Кислород продакшен на основе реальных новостей."""
     news = await fetch_news("кино фильм актёр режиссёр кастинг", language="ru")
     if not news:
         news = await fetch_news("cinema film actor director AI movie", language="en")
-
     if news:
         prompt = (
             "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН (кино, искусство, актёрское мастерство).\n\n"
             f"Свежие новости из мира кино:\n{news}\n\n"
             "На основе этих новостей напиши один увлекательный пост.\n"
-            "Требования:\n"
-            "- Длина 150-250 слов\n"
-            "- Живой, энергичный стиль\n"
-            "- 1-2 эмодзи в начале\n"
-            "- Упомяни конкретные детали из новостей\n"
-            "- Хэштеги в конце: #кино #кислородпродакшен #актёрскоемастерство\n"
-            "- Только на русском языке\n\n"
-            "Напиши только текст поста."
+            "Требования: 150-250 слов, живой стиль, 1-2 эмодзи в начале, "
+            "хэштеги в конце: #кино #кислородпродакшен #актёрскоемастерство\n"
+            "Только текст поста на русском языке."
         )
     else:
         prompt = (
-            "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН.\n"
-            "Напиши пост о современных тенденциях в кино и актёрском мастерстве.\n"
-            "150-250 слов, живой стиль, 1-2 эмодзи.\n"
-            "Хэштеги: #кино #кислородпродакшен\nТолько текст поста."
+            "Напиши пост для канала КИСЛОРОД ПРОДАКШЕН о тенденциях в кино. "
+            "150-250 слов, 1-2 эмодзи, хэштеги: #кино #кислородпродакшен\nТолько текст."
         )
-
     return await ask_yandex_gpt(prompt, [{"role": "user", "text": "Напиши пост"}])
 
 
 async def generate_actor_post() -> str:
-    """Генерирует личный пост для канала Александра Потапова."""
     news = await fetch_news("ИИ актёры кино искусственный интеллект", language="ru")
     if not news:
         news = await fetch_news("AI actors film casting technology", language="en")
-
     if news:
         prompt = (
-            "Ты помогаешь актёру Александру Потапову (1986 г.р., российский киноактёр, студия КИСЛОРОД ПРОДАКШЕН) "
-            "вести его личный Telegram-канал.\n\n"
+            "Ты помогаешь актёру Александру Потапову (1986 г.р., российский киноактёр, "
+            "студия КИСЛОРОД ПРОДАКШЕН) вести его личный Telegram-канал.\n\n"
             f"Свежие новости:\n{news}\n\n"
-            "На основе этих новостей напиши личный пост от имени Александра.\n"
-            "Требования:\n"
-            "- Длина 120-200 слов\n"
-            "- Личный тон от первого лица\n"
-            "- Александр делится мыслями об актёрской профессии\n"
-            "- 1-2 эмодзи\n"
-            "- Хэштеги: #актёр #кино #александрпотапов #актёрскоемастерство\n\n"
-            "Напиши только текст поста."
+            "Напиши личный пост от имени Александра. "
+            "120-200 слов, от первого лица, искренний тон, 1-2 эмодзи, "
+            "хэштеги: #актёр #кино #александрпотапов #актёрскоемастерство\n"
+            "Только текст поста."
         )
     else:
         prompt = (
-            "Напиши личный пост от имени актёра Александра Потапова о своём актёрском пути.\n"
-            "120-200 слов, от первого лица, искренний тон, 1-2 эмодзи.\n"
-            "Хэштеги: #актёр #кино #александрпотапов\nТолько текст поста."
+            "Напиши личный пост от имени актёра Александра Потапова об актёрском пути. "
+            "120-200 слов, от первого лица, 1-2 эмодзи. "
+            "Хэштеги: #актёр #кино #александрпотапов\nТолько текст."
         )
-
     return await ask_yandex_gpt(prompt, [{"role": "user", "text": "Напиши пост"}])
 
 
 async def generate_and_post(bot, channel: str, post_type: str):
     logger.info(f">>> Generating {post_type} post for {channel}...")
     try:
-        if post_type == "kislorod":
-            text = await generate_kislorod_post()
-        else:
-            text = await generate_actor_post()
+        text = await generate_kislorod_post() if post_type == "kislorod" else await generate_actor_post()
         await bot.send_message(chat_id=channel, text=text)
         logger.info(f">>> Post sent to {channel} ✅")
     except Exception as e:
         logger.error(f">>> Failed to post to {channel}: {e}")
 
-
-# ─────────────────────────────────────────────
-# JOB QUEUE
-# ─────────────────────────────────────────────
 
 async def job_kislorod(context: ContextTypes.DEFAULT_TYPE):
     await generate_and_post(context.bot, CHANNEL_KISLOROD, "kislorod")
@@ -343,28 +335,7 @@ async def job_actor(context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────────────────────
-# КЛАВИАТУРЫ
-# ─────────────────────────────────────────────
-
-def role_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎭 Актёр", callback_data="role_actor"),
-         InlineKeyboardButton("🎬 Режиссёр", callback_data="role_director")],
-        [InlineKeyboardButton("✍️ Сценарист", callback_data="role_screenwriter"),
-         InlineKeyboardButton("💼 Продюсер", callback_data="role_producer")],
-        [InlineKeyboardButton("🤝 Заказчик", callback_data="role_client"),
-         InlineKeyboardButton("🌐 Общий", callback_data="role_general")],
-    ])
-
-def back_keyboard():
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
-        InlineKeyboardButton("🗑 Очистить чат", callback_data="clear_chat"),
-    ]])
-
-
-# ─────────────────────────────────────────────
-# ОБРАБОТЧИКИ КОМАНД
+# ОБРАБОТЧИКИ
 # ─────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -373,19 +344,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎬 КИСЛОРОД ПРОДАКШЕН — AI АССИСТЕНТ\n\n"
         "Творческая AI-студия нового поколения.\n"
         "Мультфильмы • Клипы • Сериалы • Реклама\n\n"
-        "Выбери свою роль:",
-        reply_markup=role_keyboard(),
+        "Выбери свою роль в меню снизу 👇",
+        reply_markup=main_menu_keyboard(),
     )
 
+
 async def select_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик инлайн-кнопок."""
     query = update.callback_query
     await query.answer()
     action = query.data
 
     if action == "change_role":
         context.user_data.clear()
-        await query.edit_message_text("Выбери новую роль:", reply_markup=role_keyboard())
+        await query.edit_message_text(
+            "Выбери роль в меню снизу 👇",
+            reply_markup=None,
+        )
         return
+
     if action == "clear_chat":
         context.user_data["history"] = []
         await query.answer("История очищена ✅", show_alert=True)
@@ -394,17 +371,38 @@ async def select_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
     role_key = action.replace("role_", "")
     if role_key not in ROLE_PROMPTS:
         return
+
     context.user_data["role"] = role_key
     context.user_data["history"] = []
-    await query.edit_message_text(ROLE_PROMPTS[role_key]["welcome"], reply_markup=back_keyboard())
+    await query.edit_message_text(
+        ROLE_PROMPTS[role_key]["welcome"],
+        reply_markup=back_keyboard(),
+    )
+
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text.strip()
     if not user_text:
         return
+
+    # Проверяем нажата ли кнопка меню
+    if user_text in MENU_BUTTONS:
+        role_key = MENU_BUTTONS[user_text]
+        context.user_data["role"] = role_key
+        context.user_data["history"] = []
+        await update.message.reply_text(
+            ROLE_PROMPTS[role_key]["welcome"],
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    # Обычное сообщение — отвечаем через AI
     role_key = context.user_data.get("role")
     if not role_key:
-        await update.message.reply_text("Сначала выбери роль:", reply_markup=role_keyboard())
+        await update.message.reply_text(
+            "Выбери роль в меню снизу 👇",
+            reply_markup=main_menu_keyboard(),
+        )
         return
 
     history = context.user_data.get("history", [])
@@ -413,33 +411,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response = await ask_yandex_gpt(ROLE_PROMPTS[role_key]["system"], history)
     history.append({"role": "assistant", "text": response})
     context.user_data["history"] = history[-30:]
-    await update.message.reply_text(response, reply_markup=back_keyboard())
+
+    await update.message.reply_text(response, reply_markup=main_menu_keyboard())
+
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎬 КИСЛОРОД AI — Справка\n\n"
         "/start — Начать\n"
-        "/role — Сменить роль\n"
         "/clear — Очистить историю\n"
         "/post_now — Опубликовать посты сейчас (тест)\n"
         "/help — Справка\n\n"
+        "Или используй кнопки меню снизу 👇\n\n"
         "Контакты:\n"
         "📧 actorsashapotapov@gmail.com\n"
-        "💬 @actorsashapotapov"
+        "💬 @actorsashapotapov",
+        reply_markup=main_menu_keyboard(),
     )
 
-async def role_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Выбери роль:", reply_markup=role_keyboard())
 
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["history"] = []
-    await update.message.reply_text("История очищена ✅")
+    await update.message.reply_text("История очищена ✅", reply_markup=main_menu_keyboard())
+
 
 async def post_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Ищу свежие новости и генерирую посты...")
     await generate_and_post(context.bot, CHANNEL_KISLOROD, "kislorod")
     await generate_and_post(context.bot, CHANNEL_ACTOR, "actor")
-    await update.message.reply_text("✅ Посты опубликованы в оба канала!")
+    await update.message.reply_text("✅ Посты опубликованы в оба канала!", reply_markup=main_menu_keyboard())
 
 
 # ─────────────────────────────────────────────
@@ -457,7 +457,6 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("role", role_command))
     app.add_handler(CommandHandler("clear", clear_command))
     app.add_handler(CommandHandler("post_now", post_now_command))
     app.add_handler(CallbackQueryHandler(select_role))
@@ -472,7 +471,7 @@ def main():
     app.job_queue.run_daily(job_actor, time=time(7, 0))
     app.job_queue.run_daily(job_actor, time=time(16, 0))
 
-    logger.info("=== Bot running with NewsAPI autoposting ===")
+    logger.info("=== Bot running with persistent menu & NewsAPI autoposting ===")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
