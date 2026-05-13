@@ -6,6 +6,9 @@ from telegram import (
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    WebAppInfo,
 )
 from telegram.ext import (
     Application,
@@ -24,6 +27,8 @@ NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 CHANNEL_KISLOROD = "@realtimeproductionn"
 CHANNEL_ACTOR = "@actorsashapotapovv"
 
+WEBAPP_URL = "https://aliferovaaleksandr-del.github.io/kislorod-production/menu.html"
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -31,7 +36,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────
-# МЕНЮ (только InlineKeyboard)
+# МЕНЮ
 # ─────────────────────────────────────────────
 
 def main_menu_keyboard():
@@ -54,6 +59,15 @@ def chat_keyboard():
         InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
         InlineKeyboardButton("🗑 Очистить чат", callback_data="clear_chat"),
     ]])
+
+
+def webapp_keyboard():
+    """Нижняя кнопка Меню — открывает красивый WebApp"""
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton("📋 Меню", web_app=WebAppInfo(url=WEBAPP_URL))]],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+    )
 
 
 # ─────────────────────────────────────────────
@@ -337,12 +351,13 @@ async def job_actor(context: ContextTypes.DEFAULT_TYPE):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
+    # Сначала показываем нижнюю кнопку "Меню" (WebApp)
     await update.message.reply_text(
         "🎬 КИСЛОРОД ПРОДАКШЕН — AI АССИСТЕНТ\n\n"
         "Творческая AI-студия нового поколения.\n"
         "Мультфильмы • Клипы • Сериалы • Реклама\n\n"
-        "Выбери свою роль:",
-        reply_markup=main_menu_keyboard(),
+        "Нажми кнопку 📋 Меню внизу экрана, чтобы выбрать роль:",
+        reply_markup=webapp_keyboard(),
     )
 
 
@@ -354,8 +369,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "change_role":
         context.user_data.clear()
         await query.edit_message_text(
-            "🎬 КИСЛОРОД ПРОДАКШЕН — AI АССИСТЕНТ\n\nВыбери свою роль:",
-            reply_markup=main_menu_keyboard(),
+            "🎬 Нажми кнопку 📋 Меню внизу, чтобы выбрать роль:",
+            reply_markup=None,
         )
         return
 
@@ -385,6 +400,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_webapp_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получаем выбор роли из WebApp"""
     data = update.message.web_app_data.data.strip()
     role_key = data
     if role_key not in ROLE_PROMPTS:
@@ -405,8 +421,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     role_key = context.user_data.get("role")
     if not role_key:
         await update.message.reply_text(
-            "Выбери роль, чтобы начать:",
-            reply_markup=main_menu_keyboard(),
+            "Нажми кнопку 📋 Меню внизу, чтобы выбрать роль.",
+            reply_markup=webapp_keyboard(),
         )
         return
 
@@ -422,22 +438,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎬 КИСЛОРОД AI — Справка\n\n"
-        "/start — Начать и выбрать роль\n"
+        "/start — Начать и открыть меню\n"
         "/clear — Очистить историю\n"
         "/post_now — Опубликовать посты сейчас (тест)\n"
         "/help — Справка\n\n"
         "Контакты:\n"
         "📧 actorsashapotapov@gmail.com\n"
         "💬 @actorsashapotapov",
-        reply_markup=main_menu_keyboard(),
+        reply_markup=webapp_keyboard(),
     )
 
 
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["history"] = []
     await update.message.reply_text(
-        "✅ История очищена. Выбери роль:",
-        reply_markup=main_menu_keyboard(),
+        "✅ История очищена. Нажми 📋 Меню чтобы выбрать роль:",
+        reply_markup=webapp_keyboard(),
     )
 
 
@@ -478,7 +494,7 @@ def main():
     app.job_queue.run_daily(job_actor, time=time(7, 0))
     app.job_queue.run_daily(job_actor, time=time(16, 0))
 
-    logger.info("=== Bot running with InlineKeyboard menu & NewsAPI autoposting ===")
+    logger.info("=== Bot running with WebApp menu & NewsAPI autoposting ===")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
