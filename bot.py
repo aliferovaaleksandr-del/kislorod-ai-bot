@@ -384,6 +384,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
+async def handle_webapp_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = update.message.web_app_data.data.strip()
+    role_key = data
+    if role_key not in ROLE_PROMPTS:
+        return
+    context.user_data["role"] = role_key
+    context.user_data["history"] = []
+    await update.message.reply_text(
+        ROLE_PROMPTS[role_key]["welcome"],
+        reply_markup=chat_keyboard(),
+    )
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text.strip()
     if not user_text:
@@ -453,6 +466,7 @@ def main():
     app.add_handler(CommandHandler("clear", clear_command))
     app.add_handler(CommandHandler("post_now", post_now_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_webapp_data))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Расписание (UTC, Москва = UTC+3)
