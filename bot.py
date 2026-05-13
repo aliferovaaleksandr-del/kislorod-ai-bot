@@ -2,7 +2,13 @@ import os
 import logging
 import httpx
 from datetime import time
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -17,7 +23,6 @@ YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 
-# Каналы для автопостинга
 CHANNEL_KISLOROD = "@realtimeproductionn"
 CHANNEL_ACTOR = "@actorsashapotapovv"
 
@@ -28,7 +33,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────
-# ПОСТОЯННОЕ МЕНЮ СНИЗУ
+# МЕНЮ
 # ─────────────────────────────────────────────
 
 MENU_BUTTONS = {
@@ -40,27 +45,17 @@ MENU_BUTTONS = {
     "🌐 Общий": "general",
 }
 
+
 def main_menu_keyboard():
-    """Постоянная клавиатура снизу экрана."""
     return ReplyKeyboardMarkup(
         [
             [KeyboardButton("🎭 Актёр"), KeyboardButton("🎬 Режиссёр"), KeyboardButton("✍️ Сценарист")],
             [KeyboardButton("💼 Продюсер"), KeyboardButton("🤝 Заказчик"), KeyboardButton("🌐 Общий")],
         ],
         resize_keyboard=True,
-        persistent=True,
+        is_persistent=True,
     )
 
-def inline_role_keyboard():
-    """Инлайн-кнопки для выбора роли (используется при /start)."""
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎭 Актёр", callback_data="role_actor"),
-         InlineKeyboardButton("🎬 Режиссёр", callback_data="role_director")],
-        [InlineKeyboardButton("✍️ Сценарист", callback_data="role_screenwriter"),
-         InlineKeyboardButton("💼 Продюсер", callback_data="role_producer")],
-        [InlineKeyboardButton("🤝 Заказчик", callback_data="role_client"),
-         InlineKeyboardButton("🌐 Общий", callback_data="role_general")],
-    ])
 
 def back_keyboard():
     return InlineKeyboardMarkup([[
@@ -182,7 +177,7 @@ ROLE_PROMPTS = {
         "welcome": (
             "🌐 Добро пожаловать в КИСЛОРОД ПРОДАКШЕН!\n\n"
             "Я AI-ассистент творческой студии нового поколения.\n\n"
-            "Используй кнопки меню внизу чтобы выбрать роль!"
+            "Используй кнопки меню внизу чтобы выбрать роль 👇"
         ),
     },
 }
@@ -196,8 +191,13 @@ async def fetch_news(query: str, language: str = "ru", page_size: int = 5) -> st
     if not NEWS_API_KEY:
         return ""
     url = "https://newsapi.org/v2/everything"
-    params = {"q": query, "language": language, "sortBy": "publishedAt",
-               "pageSize": page_size, "apiKey": NEWS_API_KEY}
+    params = {
+        "q": query,
+        "language": language,
+        "sortBy": "publishedAt",
+        "pageSize": page_size,
+        "apiKey": NEWS_API_KEY,
+    }
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.get(url, params=params)
@@ -242,12 +242,16 @@ async def ask_yandex_gpt(system_prompt: str, conversation: list) -> str:
         "completionOptions": {"stream": False, "temperature": 0.7, "maxTokens": 1000},
         "messages": messages,
     }
-    headers = {"Authorization": f"Api-Key {YANDEX_API_KEY}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Api-Key {YANDEX_API_KEY}",
+        "Content-Type": "application/json",
+    }
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 "https://llm.api.cloud.yandex.net/foundationModels/v1/completion",
-                json=payload, headers=headers,
+                json=payload,
+                headers=headers,
             )
         data = response.json()
         if response.status_code == 200:
@@ -330,6 +334,7 @@ async def generate_and_post(bot, channel: str, post_type: str):
 async def job_kislorod(context: ContextTypes.DEFAULT_TYPE):
     await generate_and_post(context.bot, CHANNEL_KISLOROD, "kislorod")
 
+
 async def job_actor(context: ContextTypes.DEFAULT_TYPE):
     await generate_and_post(context.bot, CHANNEL_ACTOR, "actor")
 
@@ -350,17 +355,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def select_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик инлайн-кнопок."""
     query = update.callback_query
     await query.answer()
     action = query.data
 
     if action == "change_role":
         context.user_data.clear()
-        await query.edit_message_text(
-            "Выбери роль в меню снизу 👇",
-            reply_markup=None,
-        )
+        await query.edit_message_text("Выбери роль в меню снизу 👇")
         return
 
     if action == "clear_chat":
@@ -385,7 +386,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_text:
         return
 
-    # Проверяем нажата ли кнопка меню
+    # Нажата кнопка меню
     if user_text in MENU_BUTTONS:
         role_key = MENU_BUTTONS[user_text]
         context.user_data["role"] = role_key
@@ -396,7 +397,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Обычное сообщение — отвечаем через AI
+    # Обычное сообщение
     role_key = context.user_data.get("role")
     if not role_key:
         await update.message.reply_text(
@@ -411,7 +412,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response = await ask_yandex_gpt(ROLE_PROMPTS[role_key]["system"], history)
     history.append({"role": "assistant", "text": response})
     context.user_data["history"] = history[-30:]
-
     await update.message.reply_text(response, reply_markup=main_menu_keyboard())
 
 
@@ -422,7 +422,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/clear — Очистить историю\n"
         "/post_now — Опубликовать посты сейчас (тест)\n"
         "/help — Справка\n\n"
-        "Или используй кнопки меню снизу 👇\n\n"
         "Контакты:\n"
         "📧 actorsashapotapov@gmail.com\n"
         "💬 @actorsashapotapov",
