@@ -27,7 +27,7 @@ NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 CHANNEL_KISLOROD = "@realtimeproductionn"
 CHANNEL_ACTOR = "@actorsashapotapovv"
 
-WEBAPP_URL = "https://aliferovaaleksandr-del.github.io/kislorod-production/menu.html"
+WEBAPP_URL = "https://aliferovaaleksandr-del.github.io/kislorod-ai-bot/menu.html"
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
