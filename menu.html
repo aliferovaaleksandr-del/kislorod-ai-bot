@@ -338,6 +338,7 @@
     setTimeout(() => {
       if (tg) {
         tg.sendData(role);
+        tg.close();
       } else {
         alert('Выбрано: ' + names[role]);
       }
