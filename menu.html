@@ -12,7 +12,6 @@
 
   :root {
     --bg: #0d0a14;
-    --bg2: #13101e;
     --card: #1a1528;
     --card-hover: #221d35;
     --border: rgba(160, 100, 255, 0.15);
@@ -140,12 +139,7 @@
     border-radius: inherit;
   }
 
-  .card:active {
-    transform: scale(0.96);
-    border-color: var(--border-hover);
-    background: var(--card-hover);
-  }
-
+  .card:active { transform: scale(0.96); border-color: var(--border-hover); background: var(--card-hover); }
   .card:active::before { opacity: 1; }
 
   .card:nth-child(1) { animation-delay: 0.12s; }
@@ -155,12 +149,7 @@
   .card:nth-child(5) { animation-delay: 0.36s; }
   .card:nth-child(6) { animation-delay: 0.42s; }
 
-  .card-icon {
-    font-size: 28px;
-    margin-bottom: 10px;
-    display: block;
-    line-height: 1;
-  }
+  .card-icon { font-size: 28px; margin-bottom: 10px; display: block; line-height: 1; }
 
   .card-name {
     font-family: 'Unbounded', sans-serif;
@@ -171,33 +160,21 @@
     margin-bottom: 4px;
   }
 
-  .card-desc {
-    font-size: 10px;
-    color: var(--text-muted);
-    font-weight: 300;
-    line-height: 1.4;
-  }
+  .card-desc { font-size: 10px; color: var(--text-muted); font-weight: 300; line-height: 1.4; }
 
   .card-arrow {
     position: absolute;
-    top: 14px;
-    right: 14px;
-    width: 18px;
-    height: 18px;
+    top: 14px; right: 14px;
+    width: 18px; height: 18px;
     border: 1px solid var(--border);
     border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    display: flex; align-items: center; justify-content: center;
     font-size: 9px;
     color: var(--text-muted);
     transition: all 0.25s;
   }
 
-  .card:active .card-arrow {
-    border-color: var(--purple);
-    color: var(--purple);
-  }
+  .card:active .card-arrow { border-color: var(--purple); color: var(--purple); }
 
   .divider {
     height: 1px;
@@ -206,21 +183,39 @@
     animation: fadeUp 0.5s 0.45s ease both;
   }
 
+  .site-btn {
+    width: 100%;
+    padding: 14px;
+    margin-bottom: 16px;
+    background: linear-gradient(135deg, rgba(168,85,247,0.15), rgba(236,72,153,0.1));
+    border: 1px solid var(--border-hover);
+    border-radius: 16px;
+    text-align: center;
+    font-family: 'Unbounded', sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text);
+    cursor: pointer;
+    letter-spacing: 0.05em;
+    transition: all 0.25s ease;
+    animation: fadeUp 0.5s 0.48s ease both;
+  }
+
+  .site-btn:active {
+    transform: scale(0.97);
+    background: linear-gradient(135deg, rgba(168,85,247,0.3), rgba(236,72,153,0.2));
+  }
+
   .footer {
     text-align: center;
     animation: fadeUp 0.5s 0.5s ease both;
   }
 
-  .footer-text {
-    font-size: 10px;
-    color: var(--text-muted);
-    letter-spacing: 0.08em;
-  }
+  .footer-text { font-size: 10px; color: var(--text-muted); letter-spacing: 0.08em; }
 
   .dot {
     display: inline-block;
-    width: 5px;
-    height: 5px;
+    width: 5px; height: 5px;
     background: var(--purple);
     border-radius: 50%;
     margin: 0 6px;
@@ -229,25 +224,20 @@
     animation: pulse 2s ease-in-out infinite;
   }
 
-  .flash {
-    animation: flash 0.3s ease;
-  }
+  .flash { animation: flash 0.3s ease; }
 
   @keyframes fadeDown {
     from { opacity: 0; transform: translateY(-12px); }
     to   { opacity: 1; transform: translateY(0); }
   }
-
   @keyframes fadeUp {
     from { opacity: 0; transform: translateY(14px); }
     to   { opacity: 1; transform: translateY(0); }
   }
-
   @keyframes pulse {
     0%, 100% { opacity: 1; transform: scale(1); }
     50%       { opacity: 0.5; transform: scale(0.8); }
   }
-
   @keyframes flash {
     0%   { background: var(--card-hover); }
     50%  { background: rgba(168,85,247,0.25); }
@@ -307,6 +297,10 @@
 
   <div class="divider"></div>
 
+  <div class="site-btn" onclick="openSite()">
+    🌐 Открыть сайт студии
+  </div>
+
   <div class="footer">
     <span class="footer-text">КИСЛОРОД ПРОДАКШЕН</span>
     <span class="dot"></span>
@@ -324,15 +318,6 @@
     tg.setBackgroundColor('#0d0a14');
   }
 
-  const names = {
-    actor: '🎭 Актёр',
-    director: '🎬 Режиссёр',
-    screenwriter: '✍️ Сценарист',
-    producer: '💼 Продюсер',
-    client: '🤝 Заказчик',
-    general: '🌐 Общий',
-  };
-
   function selectRole(role, el) {
     el.classList.add('flash');
     setTimeout(() => {
@@ -340,9 +325,17 @@
         tg.sendData(role);
         tg.close();
       } else {
-        alert('Выбрано: ' + names[role]);
+        alert('Выбрано: ' + role);
       }
     }, 280);
+  }
+
+  function openSite() {
+    if (tg) {
+      tg.openLink('https://aliferovaaleksandr-del.github.io/kislorod-production/');
+    } else {
+      window.open('https://aliferovaaleksandr-del.github.io/kislorod-production/', '_blank');
+    }
   }
 </script>
 </body>
