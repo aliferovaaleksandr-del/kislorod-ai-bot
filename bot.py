@@ -433,8 +433,7 @@ async def fetch_kinopoisk_trailer() -> dict:
         logger.warning("KINOPOISK_API_KEY не задан!")
         return {}
 
-    headers = {"X-API-KEY": KINOPOISK_API_KEY, "accept": "application/json"}
-    base    = "https://api.kinopoisk.dev/v1.4"
+    base = "https://api.kinopoisk.dev/v1.4"
 
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
@@ -449,6 +448,7 @@ async def fetch_kinopoisk_trailer() -> dict:
             r = await client.get(
                 f"{base}/movie",
                 params={
+                    "token":         KINOPOISK_API_KEY,
                     "type":          "movie",
                     "year":          year,
                     "sortField":     sort_field,
@@ -456,7 +456,6 @@ async def fetch_kinopoisk_trailer() -> dict:
                     "limit":         20,
                     "notNullFields": "videos.trailers.url",
                 },
-                headers=headers,
             )
 
             if r.status_code != 200:
