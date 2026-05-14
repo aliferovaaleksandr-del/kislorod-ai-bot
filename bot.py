@@ -1,7 +1,7 @@
 import os
 import logging
 import httpx
-from datetime import time
+from datetime import time as dtime
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -35,6 +35,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 # ─────────────────────────────────────────────
 # МЕНЮ
 # ─────────────────────────────────────────────
@@ -62,7 +63,6 @@ def chat_keyboard():
 
 
 def webapp_keyboard():
-    """Нижняя кнопка Меню — открывает красивый WebApp"""
     return ReplyKeyboardMarkup(
         [[KeyboardButton("📋 Меню", web_app=WebAppInfo(url=WEBAPP_URL))]],
         resize_keyboard=True,
@@ -190,12 +190,39 @@ ROLE_PROMPTS = {
 
 
 # ─────────────────────────────────────────────
-# NEWSAPI
+# NEWSAPI — получение свежих новостей
 # ─────────────────────────────────────────────
 
+# Набор разных запросов, чтобы посты не повторялись
+KISLOROD_QUERIES = [
+    "кино фильм премьера",
+    "режиссёр съёмки кинофестиваль",
+    "мультфильм анимация студия",
+    "актёр кастинг роль",
+    "сериал продакшен производство",
+    "реклама клип видео продакшен",
+]
+
+ACTOR_QUERIES = [
+    "актёр кино новости",
+    "ИИ искусственный интеллект актёры",
+    "актёрское мастерство театр",
+    "кастинг роль российское кино",
+    "звезда кино интервью",
+    "фестиваль кино наград",
+]
+
+# Счётчики для ротации запросов
+_kislorod_query_index = 0
+_actor_query_index = 0
+
+
 async def fetch_news(query: str, language: str = "ru", page_size: int = 5) -> str:
+    """Получает свежие новости через NewsAPI."""
     if not NEWS_API_KEY:
+        logger.warning("NEWS_API_KEY не задан!")
         return ""
+
     url = "https://newsapi.org/v2/everything"
     params = {
         "q": query,
@@ -204,32 +231,42 @@ async def fetch_news(query: str, language: str = "ru", page_size: int = 5) -> st
         "pageSize": page_size,
         "apiKey": NEWS_API_KEY,
     }
+
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.get(url, params=params)
-        if response.status_code == 200:
+
+        if response.status_code != 200:
+            logger.error(f"NewsAPI вернул {response.status_code}: {response.text}")
+            return ""
+
+        articles = response.json().get("articles", [])
+
+        # Если по-русски ничего нет — пробуем по-английски
+        if not articles and language == "ru":
+            params["language"] = "en"
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(url, params=params)
             articles = response.json().get("articles", [])
-            if not articles:
-                params["language"] = "en"
-                async with httpx.AsyncClient(timeout=15.0) as client:
-                    response = await client.get(url, params=params)
-                articles = response.json().get("articles", [])
-            news_text = ""
-            for i, a in enumerate(articles[:5], 1):
-                title = a.get("title", "")
-                desc = a.get("description", "")
-                source = a.get("source", {}).get("name", "")
-                if title and title != "[Removed]":
-                    news_text += f"{i}. {title}"
-                    if desc and desc != "[Removed]":
-                        news_text += f"\n   {desc}"
-                    if source:
-                        news_text += f"\n   Источник: {source}"
-                    news_text += "\n\n"
-            return news_text.strip()
-        return ""
+
+        news_text = ""
+        for i, a in enumerate(articles[:5], 1):
+            title = a.get("title", "")
+            desc = a.get("description", "")
+            source = a.get("source", {}).get("name", "")
+            published = a.get("publishedAt", "")[:10]  # только дата
+            if title and title != "[Removed]":
+                news_text += f"{i}. [{published}] {title}"
+                if desc and desc != "[Removed]":
+                    news_text += f"\n   {desc}"
+                if source:
+                    news_text += f"\n   Источник: {source}"
+                news_text += "\n\n"
+
+        return news_text.strip()
+
     except Exception as e:
-        logger.error(f">>> NewsAPI exception: {e}")
+        logger.error(f"NewsAPI exception: {e}")
         return ""
 
 
@@ -240,18 +277,21 @@ async def fetch_news(query: str, language: str = "ru", page_size: int = 5) -> st
 async def ask_yandex_gpt(system_prompt: str, conversation: list) -> str:
     if not YANDEX_API_KEY or not YANDEX_FOLDER_ID:
         return "Ошибка конфигурации: не заданы переменные окружения."
+
     messages = [{"role": "system", "text": system_prompt}]
     for msg in conversation[-20:]:
         messages.append({"role": msg["role"], "text": msg["text"]})
+
     payload = {
         "modelUri": f"gpt://{YANDEX_FOLDER_ID}/yandexgpt/latest",
-        "completionOptions": {"stream": False, "temperature": 0.7, "maxTokens": 1000},
+        "completionOptions": {"stream": False, "temperature": 0.8, "maxTokens": 1000},
         "messages": messages,
     }
     headers = {
         "Authorization": f"Api-Key {YANDEX_API_KEY}",
         "Content-Type": "application/json",
     }
+
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
@@ -275,7 +315,7 @@ async def ask_yandex_gpt(system_prompt: str, conversation: list) -> str:
     except httpx.TimeoutException:
         return "Яндекс API не ответил за 30 секунд."
     except Exception as e:
-        logger.error(f">>> EXCEPTION {type(e).__name__}: {e}")
+        logger.error(f"YandexGPT exception {type(e).__name__}: {e}")
         return "Не удалось получить ответ. Попробуй снова."
 
 
@@ -284,74 +324,148 @@ async def ask_yandex_gpt(system_prompt: str, conversation: list) -> str:
 # ─────────────────────────────────────────────
 
 async def generate_kislorod_post() -> str:
-    news = await fetch_news("кино фильм актёр режиссёр кастинг", language="ru")
+    """Генерирует пост для канала @realtimeproductionn."""
+    global _kislorod_query_index
+
+    # Ротация запросов для разнообразия
+    query = KISLOROD_QUERIES[_kislorod_query_index % len(KISLOROD_QUERIES)]
+    _kislorod_query_index += 1
+
+    logger.info(f"Ищу новости для Кислород по запросу: '{query}'")
+    news = await fetch_news(query, language="ru")
     if not news:
-        news = await fetch_news("cinema film actor director AI movie", language="en")
+        news = await fetch_news("cinema film production", language="en")
+
     if news:
-        prompt = (
-            "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН (кино, искусство, актёрское мастерство).\n\n"
-            f"Свежие новости из мира кино:\n{news}\n\n"
-            "На основе этих новостей напиши один увлекательный пост.\n"
-            "Требования: 150-250 слов, живой стиль, 1-2 эмодзи в начале, "
-            "хэштеги в конце: #кино #кислородпродакшен #актёрскоемастерство\n"
-            "Только текст поста на русском языке."
+        system = (
+            "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН. "
+            "Студия создаёт мультфильмы, клипы, сериалы и рекламу с помощью AI. "
+            "Пиши интересно, живо, с уважением к читателю. "
+            "Отвечай ТОЛЬКО текстом поста — без пояснений, без markdown, без кавычек вокруг поста."
+        )
+        user_msg = (
+            f"Свежие новости из мира кино и продакшена:\n\n{news}\n\n"
+            "На основе этих новостей напиши один пост для Telegram-канала.\n"
+            "Требования:\n"
+            "— 150–250 слов\n"
+            "— Живой, увлекательный стиль\n"
+            "— 1–2 тематических эмодзи в начале\n"
+            "— В конце хэштеги: #кино #кислородпродакшен #продакшен #актёрскоемастерство\n"
+            "— Только текст поста на русском языке, без заголовка"
         )
     else:
-        prompt = (
-            "Напиши пост для канала КИСЛОРОД ПРОДАКШЕН о тенденциях в кино. "
-            "150-250 слов, 1-2 эмодзи, хэштеги: #кино #кислородпродакшен\nТолько текст."
+        system = (
+            "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН — творческой AI-студии. "
+            "Отвечай ТОЛЬКО текстом поста."
         )
-    return await ask_yandex_gpt(prompt, [{"role": "user", "text": "Напиши пост"}])
+        user_msg = (
+            "Напиши пост для Telegram-канала о трендах в кино и продакшене. "
+            "150–250 слов, 1–2 эмодзи, хэштеги: #кино #кислородпродакшен #продакшен"
+        )
+
+    return await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
 
 
 async def generate_actor_post() -> str:
-    news = await fetch_news("ИИ актёры кино искусственный интеллект", language="ru")
+    """Генерирует пост для личного канала @actorsashapotapovv."""
+    global _actor_query_index
+
+    query = ACTOR_QUERIES[_actor_query_index % len(ACTOR_QUERIES)]
+    _actor_query_index += 1
+
+    logger.info(f"Ищу новости для актёрского канала по запросу: '{query}'")
+    news = await fetch_news(query, language="ru")
     if not news:
-        news = await fetch_news("AI actors film casting technology", language="en")
+        news = await fetch_news("actor film AI casting technology", language="en")
+
     if news:
-        prompt = (
-            "Ты помогаешь актёру Александру Потапову (1986 г.р., российский киноактёр, "
-            "студия КИСЛОРОД ПРОДАКШЕН) вести его личный Telegram-канал.\n\n"
-            f"Свежие новости:\n{news}\n\n"
-            "Напиши личный пост от имени Александра. "
-            "120-200 слов, от первого лица, искренний тон, 1-2 эмодзи, "
-            "хэштеги: #актёр #кино #александрпотапов #актёрскоемастерство\n"
-            "Только текст поста."
+        system = (
+            "Ты помогаешь актёру Александру Потапову (1986 г.р.) вести его личный Telegram-канал. "
+            "Александр — российский киноактёр и основатель студии КИСЛОРОД ПРОДАКШЕН. "
+            "Пиши от его имени: искренне, по-человечески, с личным взглядом на профессию. "
+            "Отвечай ТОЛЬКО текстом поста — без пояснений, без markdown."
+        )
+        user_msg = (
+            f"Свежие новости из мира кино и актёрства:\n\n{news}\n\n"
+            "Напиши личный пост от имени Александра Потапова.\n"
+            "Требования:\n"
+            "— 120–200 слов\n"
+            "— От первого лица, искренний личный тон\n"
+            "— Своё мнение о новостях или тема из профессиональной жизни\n"
+            "— 1–2 эмодзи\n"
+            "— Хэштеги в конце: #актёр #кино #александрпотапов #актёрскоемастерство\n"
+            "— Только текст поста на русском языке"
         )
     else:
-        prompt = (
-            "Напиши личный пост от имени актёра Александра Потапова об актёрском пути. "
-            "120-200 слов, от первого лица, 1-2 эмодзи. "
-            "Хэштеги: #актёр #кино #александрпотапов\nТолько текст."
+        system = (
+            "Ты помогаешь актёру Александру Потапову вести его личный Telegram-канал. "
+            "Отвечай ТОЛЬКО текстом поста."
         )
-    return await ask_yandex_gpt(prompt, [{"role": "user", "text": "Напиши пост"}])
+        user_msg = (
+            "Напиши личный пост от имени актёра Александра Потапова об актёрском пути и профессии. "
+            "120–200 слов, от первого лица, 1–2 эмодзи. "
+            "Хэштеги: #актёр #кино #александрпотапов #актёрскоемастерство"
+        )
+
+    return await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
 
 
 async def generate_and_post(bot, channel: str, post_type: str):
-    logger.info(f">>> Generating {post_type} post for {channel}...")
+    """Генерирует пост и отправляет в канал."""
+    logger.info(f"Генерирую пост типа '{post_type}' для {channel}...")
     try:
-        text = await generate_kislorod_post() if post_type == "kislorod" else await generate_actor_post()
+        if post_type == "kislorod":
+            text = await generate_kislorod_post()
+        else:
+            text = await generate_actor_post()
+
+        if not text or text.startswith("Ошибка"):
+            logger.error(f"Пост не сгенерирован: {text}")
+            return
+
         await bot.send_message(chat_id=channel, text=text)
-        logger.info(f">>> Post sent to {channel} ✅")
+        logger.info(f"✅ Пост отправлен в {channel}")
+
     except Exception as e:
-        logger.error(f">>> Failed to post to {channel}: {e}")
+        logger.error(f"Не удалось отправить пост в {channel}: {e}")
 
 
-async def job_kislorod(context: ContextTypes.DEFAULT_TYPE):
+# ─────────────────────────────────────────────
+# JOB FUNCTIONS — расписание постов
+# ─────────────────────────────────────────────
+# Время UTC (Москва = UTC+3, поэтому вычитаем 3 часа)
+#
+# @realtimeproductionn — 3 поста в день:
+#   10:00 МСК → 07:00 UTC
+#   14:00 МСК → 11:00 UTC
+#   19:00 МСК → 16:00 UTC
+#
+# @actorsashapotapovv — 2 поста в день:
+#   11:00 МСК → 08:00 UTC
+#   20:00 МСК → 17:00 UTC
+
+async def job_kislorod_1(context: ContextTypes.DEFAULT_TYPE):
     await generate_and_post(context.bot, CHANNEL_KISLOROD, "kislorod")
 
+async def job_kislorod_2(context: ContextTypes.DEFAULT_TYPE):
+    await generate_and_post(context.bot, CHANNEL_KISLOROD, "kislorod")
 
-async def job_actor(context: ContextTypes.DEFAULT_TYPE):
+async def job_kislorod_3(context: ContextTypes.DEFAULT_TYPE):
+    await generate_and_post(context.bot, CHANNEL_KISLOROD, "kislorod")
+
+async def job_actor_1(context: ContextTypes.DEFAULT_TYPE):
+    await generate_and_post(context.bot, CHANNEL_ACTOR, "actor")
+
+async def job_actor_2(context: ContextTypes.DEFAULT_TYPE):
     await generate_and_post(context.bot, CHANNEL_ACTOR, "actor")
 
 
 # ─────────────────────────────────────────────
-# ОБРАБОТЧИКИ
+# ОБРАБОТЧИКИ TELEGRAM
 # ─────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    # Сначала показываем нижнюю кнопку "Меню" (WebApp)
     await update.message.reply_text(
         "🎬 КИСЛОРОД ПРОДАКШЕН — AI АССИСТЕНТ\n\n"
         "Творческая AI-студия нового поколения.\n"
@@ -400,7 +514,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_webapp_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получаем выбор роли из WebApp"""
     data = update.message.web_app_data.data.strip()
     role_key = data
     if role_key not in ROLE_PROMPTS:
@@ -439,8 +552,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎬 КИСЛОРОД AI — Справка\n\n"
         "/start — Начать и открыть меню\n"
-        "/clear — Очистить историю\n"
+        "/clear — Очистить историю чата\n"
         "/post_now — Опубликовать посты сейчас (тест)\n"
+        "/schedule — Расписание автопостинга\n"
         "/help — Справка\n\n"
         "Контакты:\n"
         "📧 actorsashapotapov@gmail.com\n"
@@ -457,8 +571,27 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает расписание автопостинга."""
+    await update.message.reply_text(
+        "📅 Расписание автопостинга (МСК):\n\n"
+        "📺 @realtimeproductionn — 3 поста в день:\n"
+        "   🕙 10:00 — новости кино и продакшена\n"
+        "   🕑 14:00 — тренды и индустрия\n"
+        "   🕖 19:00 — вечерний дайджест\n\n"
+        "🎭 @actorsashapotapovv — 2 поста в день:\n"
+        "   🕚 11:00 — утренний пост от Александра\n"
+        "   🕗 20:00 — вечерний пост от Александра\n\n"
+        "Всего: 5 постов в день на основе свежих новостей NewsAPI 📰"
+    )
+
+
 async def post_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ Ищу свежие новости и генерирую посты...")
+    """Тестовая публикация постов немедленно."""
+    await update.message.reply_text(
+        "⏳ Ищу свежие новости и генерирую посты...\n"
+        "Это займёт ~15–30 секунд."
+    )
     await generate_and_post(context.bot, CHANNEL_KISLOROD, "kislorod")
     await generate_and_post(context.bot, CHANNEL_ACTOR, "actor")
     await update.message.reply_text("✅ Посты опубликованы в оба канала!")
@@ -470,31 +603,38 @@ async def post_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     logger.info("=== KISLOROD AI Bot starting ===")
-    logger.info(f"=== BOT_TOKEN set: {bool(BOT_TOKEN)} ===")
-    logger.info(f"=== YANDEX_API_KEY set: {bool(YANDEX_API_KEY)} ===")
-    logger.info(f"=== YANDEX_FOLDER_ID: {YANDEX_FOLDER_ID} ===")
-    logger.info(f"=== NEWS_API_KEY set: {bool(NEWS_API_KEY)} ===")
+    logger.info(f"BOT_TOKEN:       {'✅ задан' if BOT_TOKEN else '❌ НЕ ЗАДАН'}")
+    logger.info(f"YANDEX_API_KEY:  {'✅ задан' if YANDEX_API_KEY else '❌ НЕ ЗАДАН'}")
+    logger.info(f"YANDEX_FOLDER_ID: {YANDEX_FOLDER_ID or '❌ НЕ ЗАДАН'}")
+    logger.info(f"NEWS_API_KEY:    {'✅ задан' if NEWS_API_KEY else '❌ НЕ ЗАДАН'}")
 
     app = Application.builder().token(BOT_TOKEN).build()
 
+    # Команды
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("clear", clear_command))
+    app.add_handler(CommandHandler("schedule", schedule_command))
     app.add_handler(CommandHandler("post_now", post_now_command))
+
+    # Колбэки и сообщения
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_webapp_data))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Расписание (UTC, Москва = UTC+3)
-    # Кислород: 09:00, 13:00, 18:00 МСК
-    app.job_queue.run_daily(job_kislorod, time=time(6, 0))
-    app.job_queue.run_daily(job_kislorod, time=time(10, 0))
-    app.job_queue.run_daily(job_kislorod, time=time(15, 0))
-    # Александр: 10:00, 19:00 МСК
-    app.job_queue.run_daily(job_actor, time=time(7, 0))
-    app.job_queue.run_daily(job_actor, time=time(16, 0))
+    # ─── Расписание автопостинга (UTC) ───
+    # @realtimeproductionn: 10:00, 14:00, 19:00 МСК → 07:00, 11:00, 16:00 UTC
+    app.job_queue.run_daily(job_kislorod_1, time=dtime(7, 0))
+    app.job_queue.run_daily(job_kislorod_2, time=dtime(11, 0))
+    app.job_queue.run_daily(job_kislorod_3, time=dtime(16, 0))
 
-    logger.info("=== Bot running with WebApp menu & NewsAPI autoposting ===")
+    # @actorsashapotapovv: 11:00, 20:00 МСК → 08:00, 17:00 UTC
+    app.job_queue.run_daily(job_actor_1, time=dtime(8, 0))
+    app.job_queue.run_daily(job_actor_2, time=dtime(17, 0))
+
+    logger.info("=== Расписание: Кислород 07/11/16 UTC | Актёр 08/17 UTC ===")
+    logger.info("=== Bot запущен! ===")
+
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
