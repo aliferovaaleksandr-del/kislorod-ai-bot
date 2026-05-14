@@ -24,7 +24,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
-KINOPOISK_API_KEY = os.getenv("KINOPOISK_API_KEY")  # токен с kinopoisk.dev
+KINOPOISK_API_KEY = os.getenv("KINOPOISK_API_KEY")  # токен с kinopoiskapiunofficial.tech
 
 CHANNEL_KISLOROD = "@realtimeproductionn"
 CHANNEL_ACTOR = "@actorsashapotapovv"
@@ -195,7 +195,6 @@ ROLE_PROMPTS = {
 # NEWSAPI — получение свежих новостей
 # ─────────────────────────────────────────────
 
-# Набор разных запросов, чтобы посты не повторялись
 KISLOROD_QUERIES = [
     "кино фильм премьера",
     "режиссёр съёмки кинофестиваль",
@@ -214,17 +213,11 @@ ACTOR_QUERIES = [
     "фестиваль кино наград",
 ]
 
-# Счётчики для ротации запросов
 _kislorod_query_index = 0
 _actor_query_index = 0
 
 
 async def fetch_news(query: str, language: str = "ru", page_size: int = 5) -> tuple[str, str]:
-    """
-    Получает свежие новости через NewsAPI.
-    Возвращает кортеж: (текст_новостей, url_картинки_или_пустая_строка).
-    Картинка берётся из первой статьи у которой есть urlToImage.
-    """
     if not NEWS_API_KEY:
         logger.warning("NEWS_API_KEY не задан!")
         return "", ""
@@ -248,7 +241,6 @@ async def fetch_news(query: str, language: str = "ru", page_size: int = 5) -> tu
 
         articles = response.json().get("articles", [])
 
-        # Если по-русски ничего нет — пробуем по-английски
         if not articles and language == "ru":
             params["language"] = "en"
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -265,7 +257,6 @@ async def fetch_news(query: str, language: str = "ru", page_size: int = 5) -> tu
             published = a.get("publishedAt", "")[:10]
             img = a.get("urlToImage", "") or ""
 
-            # Берём картинку из первой подходящей статьи
             if not image_url and img and img.startswith("http"):
                 image_url = img
 
@@ -338,7 +329,6 @@ async def ask_yandex_gpt(system_prompt: str, conversation: list) -> str:
 # ─────────────────────────────────────────────
 
 async def generate_kislorod_post() -> tuple:
-    """Возвращает (текст, image_url) для @realtimeproductionn."""
     global _kislorod_query_index
     query = KISLOROD_QUERIES[_kislorod_query_index % len(KISLOROD_QUERIES)]
     _kislorod_query_index += 1
@@ -380,7 +370,6 @@ async def generate_kislorod_post() -> tuple:
 
 
 async def generate_actor_post() -> tuple:
-    """Возвращает (текст, image_url) для @actorsashapotapovv."""
     global _actor_query_index
     query = ACTOR_QUERIES[_actor_query_index % len(ACTOR_QUERIES)]
     _actor_query_index += 1
@@ -423,75 +412,118 @@ async def generate_actor_post() -> tuple:
     return text, image_url
 
 
+# ─────────────────────────────────────────────
+# КИНОПОИСК — kinopoiskapiunofficial.tech
+# ─────────────────────────────────────────────
+# Документация: https://kinopoiskapiunofficial.tech/documentation/
+
 async def fetch_kinopoisk_trailer() -> dict:
     """
-    Получает случайный свежий фильм из Кинопоиска с трейлером.
+    Получает случайный популярный фильм из Кинопоиска (неофициальный API).
     Возвращает: {title, description, poster_url, trailer_url, year, genres}
     или {} если ничего не нашёл.
+
+    Эндпоинт: GET /api/v2.2/films/top
+    Документация: https://kinopoiskapiunofficial.tech/documentation/
     """
     if not KINOPOISK_API_KEY:
         logger.warning("KINOPOISK_API_KEY не задан!")
         return {}
 
-    base = "https://api.kinopoisk.dev/v1.4"
+    BASE = "https://kinopoiskapiunofficial.tech"
+    HEADERS = {
+        "X-API-KEY": KINOPOISK_API_KEY,
+        "Content-Type": "application/json",
+    }
 
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            # Чередуем подборки для разнообразия
-            sort_options = [
-                ("votes.imdb", "2024-2025"),
-                ("rating.kp",  "2023-2025"),
-                ("votes.kp",   "2025"),
-            ]
-            sort_field, year = random.choice(sort_options)
+
+            # ── Шаг 1: берём список TOP-250 (или популярных) ──────────────
+            # type: TOP_250_BEST_FILMS | TOP_100_POPULAR_FILMS | TOP_AWAIT_FILMS
+            top_type = random.choice(["TOP_250_BEST_FILMS", "TOP_100_POPULAR_FILMS"])
+            page = random.randint(1, 5)  # страницы по 20 фильмов
 
             r = await client.get(
-                f"{base}/movie",
-                params={
-                    "token":         KINOPOISK_API_KEY,
-                    "type":          "movie",
-                    "year":          year,
-                    "sortField":     sort_field,
-                    "sortType":      "-1",
-                    "limit":         20,
-                    "notNullFields": "videos.trailers.url",
-                },
+                f"{BASE}/api/v2.2/films/top",
+                headers=HEADERS,
+                params={"type": top_type, "page": page},
             )
 
+            if r.status_code == 402:
+                logger.error("Kinopoisk: лимит запросов исчерпан (402)")
+                return {}
             if r.status_code != 200:
-                logger.error(f"Kinopoisk {r.status_code}: {r.text[:300]}")
+                logger.error(f"Kinopoisk top {r.status_code}: {r.text[:300]}")
                 return {}
 
-            movies = r.json().get("docs", [])
-            if not movies:
+            films = r.json().get("films", [])
+            if not films:
                 logger.warning("Кинопоиск: пустой список фильмов")
                 return {}
 
-            movie = random.choice(movies[:10])
+            # ── Шаг 2: случайный фильм из выборки ─────────────────────────
+            film = random.choice(films[:15])
+            film_id = film.get("filmId")
 
-            title       = movie.get("name") or movie.get("alternativeName") or "Без названия"
-            description = movie.get("description") or movie.get("shortDescription") or ""
-            year_val    = movie.get("year", "")
-            poster_url  = (movie.get("poster") or {}).get("url", "")
-            genres      = ", ".join(
-                g["name"] for g in (movie.get("genres") or [])[:3] if g.get("name")
+            title    = film.get("nameRu") or film.get("nameEn") or "Без названия"
+            year_val = film.get("year", "")
+            poster_url = film.get("posterUrlPreview") or film.get("posterUrl") or ""
+            genres   = ", ".join(
+                g["genre"] for g in (film.get("genres") or [])[:3] if g.get("genre")
             )
 
-            # Ищем трейлер (предпочитаем YouTube)
+            # ── Шаг 3: получаем описание фильма ───────────────────────────
+            description = ""
+            if film_id:
+                rd = await client.get(
+                    f"{BASE}/api/v2.2/films/{film_id}",
+                    headers=HEADERS,
+                )
+                if rd.status_code == 200:
+                    detail = rd.json()
+                    description = (
+                        detail.get("description")
+                        or detail.get("shortDescription")
+                        or ""
+                    )
+                    # Обновляем постер на полный если есть
+                    poster_url = (
+                        (detail.get("posterUrl") or poster_url)
+                    )
+
+            # ── Шаг 4: ищем трейлер ───────────────────────────────────────
             trailer_url = ""
-            trailers = (movie.get("videos") or {}).get("trailers") or []
-            for t in trailers:
-                url = t.get("url", "")
-                if "youtube.com" in url or "youtu.be" in url:
-                    trailer_url = url
-                    break
-            if not trailer_url and trailers:
-                trailer_url = trailers[0].get("url", "")
+            if film_id:
+                rv = await client.get(
+                    f"{BASE}/api/v2.2/films/{film_id}/videos",
+                    headers=HEADERS,
+                )
+                if rv.status_code == 200:
+                    videos = rv.json().get("items", [])
+                    # Предпочитаем YouTube-трейлеры
+                    for v in videos:
+                        url  = v.get("url", "")
+                        site = v.get("site", "")
+                        name = (v.get("name") or "").lower()
+                        if site == "YOUTUBE" and "трейлер" in name:
+                            trailer_url = url
+                            break
+                    # Любой YouTube если нет трейлера
+                    if not trailer_url:
+                        for v in videos:
+                            if v.get("site") == "YOUTUBE":
+                                trailer_url = v.get("url", "")
+                                break
+                    # Любое видео если YouTube вообще нет
+                    if not trailer_url and videos:
+                        trailer_url = videos[0].get("url", "")
 
             if not trailer_url:
-                logger.warning(f"Для '{title}' нет трейлера")
+                logger.warning(f"Для '{title}' нет трейлера, пропускаем")
                 return {}
 
+            logger.info(f"Кинопоиск: нашли «{title}» ({year_val}), трейлер: {trailer_url}")
             return {
                 "title":       title,
                 "description": description,
@@ -572,7 +604,6 @@ async def job_kislorod_trailer(context: ContextTypes.DEFAULT_TYPE):
     if text:
         await send_post(context.bot, CHANNEL_KISLOROD, text, poster)
     else:
-        # Fallback — обычный пост если Кинопоиск недоступен
         text2, img2 = await generate_kislorod_post()
         await send_post(context.bot, CHANNEL_KISLOROD, text2, img2)
 
