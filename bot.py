@@ -1,4 +1,5 @@
 import os
+import asyncio
 import logging
 import random
 import httpx
@@ -24,12 +25,34 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
-KINOPOISK_API_KEY = os.getenv("KINOPOISK_API_KEY")  # токен с kinopoiskapiunofficial.tech
+KINOPOISK_API_KEY = os.getenv("KINOPOISK_API_KEY")
 
 CHANNEL_KISLOROD = "@realtimeproductionn"
 CHANNEL_ACTOR = "@actorsashapotapovv"
 
 WEBAPP_URL = "https://aliferovaaleksandr-del.github.io/kislorod-ai-bot/menu.html"
+
+# ─────────────────────────────────────────────
+# ЗАЩИТА: только эти user_id могут использовать
+# команды постинга и служебные команды
+# ─────────────────────────────────────────────
+ADMIN_IDS = {8780881836}
+
+
+def admin_only(func):
+    """Декоратор: ограничивает команду только для администраторов."""
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        if user_id not in ADMIN_IDS:
+            await update.message.reply_text(
+                "⛔ У вас нет доступа к этой команде."
+            )
+            logger.warning(f"Попытка доступа к admin-команде от user_id={user_id}")
+            return
+        return await func(update, context)
+    wrapper.__name__ = func.__name__
+    return wrapper
+
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -192,7 +215,7 @@ ROLE_PROMPTS = {
 
 
 # ─────────────────────────────────────────────
-# NEWSAPI — получение свежих новостей
+# NEWSAPI
 # ─────────────────────────────────────────────
 
 KISLOROD_QUERIES = [
@@ -276,10 +299,15 @@ async def fetch_news(query: str, language: str = "ru", page_size: int = 5) -> tu
 
 
 # ─────────────────────────────────────────────
-# YANDEX GPT
+# YANDEX GPT — с retry и backoff
 # ─────────────────────────────────────────────
 
-async def ask_yandex_gpt(system_prompt: str, conversation: list) -> str:
+async def ask_yandex_gpt(system_prompt: str, conversation: list, retries: int = 3) -> str:
+    """
+    Отправляет запрос к Yandex GPT.
+    При ошибках 429/500/503 делает до `retries` попыток с экспоненциальным backoff.
+    Возвращает текст ответа или понятное сообщение об ошибке.
+    """
     if not YANDEX_API_KEY or not YANDEX_FOLDER_ID:
         return "Ошибка конфигурации: не заданы переменные окружения."
 
@@ -297,31 +325,79 @@ async def ask_yandex_gpt(system_prompt: str, conversation: list) -> str:
         "Content-Type": "application/json",
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                "https://llm.api.cloud.yandex.net/foundationModels/v1/completion",
-                json=payload,
-                headers=headers,
-            )
-        data = response.json()
-        if response.status_code == 200:
-            return data["result"]["alternatives"][0]["message"]["text"]
-        elif response.status_code == 401:
-            return "Ошибка авторизации (401). Проверь YANDEX_API_KEY."
-        elif response.status_code == 403:
-            return "Нет доступа (403). Проверь права сервисного аккаунта и биллинг."
-        elif response.status_code == 404:
-            return "Модель не найдена (404). Проверь YANDEX_FOLDER_ID."
-        else:
-            return f"Ошибка AI ({response.status_code}). Попробуй снова."
-    except httpx.ConnectError:
-        return "Не удалось подключиться к Яндекс API."
-    except httpx.TimeoutException:
-        return "Яндекс API не ответил за 30 секунд."
-    except Exception as e:
-        logger.error(f"YandexGPT exception {type(e).__name__}: {e}")
-        return "Не удалось получить ответ. Попробуй снова."
+    last_error = ""
+    for attempt in range(1, retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    "https://llm.api.cloud.yandex.net/foundationModels/v1/completion",
+                    json=payload,
+                    headers=headers,
+                )
+            data = response.json()
+
+            if response.status_code == 200:
+                text = data["result"]["alternatives"][0]["message"]["text"].strip()
+                if not text:
+                    # Пустой ответ — возвращаем fallback
+                    logger.warning("Yandex GPT вернул пустой ответ")
+                    return "Не смог сформулировать ответ. Попробуй переформулировать вопрос."
+                return text
+
+            elif response.status_code == 429:
+                wait = 2 ** attempt
+                logger.warning(f"Yandex GPT 429, попытка {attempt}/{retries}, жду {wait}с")
+                last_error = "Слишком много запросов — попробуй через минуту."
+                await asyncio.sleep(wait)
+
+            elif response.status_code in (500, 503):
+                wait = 2 ** attempt
+                logger.warning(f"Yandex GPT {response.status_code}, попытка {attempt}/{retries}, жду {wait}с")
+                last_error = "Сервис временно недоступен."
+                await asyncio.sleep(wait)
+
+            elif response.status_code == 401:
+                return "Ошибка авторизации (401). Проверь YANDEX_API_KEY."
+            elif response.status_code == 403:
+                return "Нет доступа (403). Проверь права сервисного аккаунта и биллинг."
+            elif response.status_code == 404:
+                return "Модель не найдена (404). Проверь YANDEX_FOLDER_ID."
+            else:
+                return f"Ошибка AI ({response.status_code}). Попробуй снова."
+
+        except httpx.ConnectError:
+            last_error = "Не удалось подключиться к Яндекс API."
+            logger.error(f"ConnectError, попытка {attempt}/{retries}")
+            await asyncio.sleep(2 ** attempt)
+        except httpx.TimeoutException:
+            last_error = "Яндекс API не ответил за 30 секунд."
+            logger.error(f"TimeoutException, попытка {attempt}/{retries}")
+            await asyncio.sleep(2 ** attempt)
+        except Exception as e:
+            logger.error(f"YandexGPT exception {type(e).__name__}: {e}")
+            return "Не удалось получить ответ. Попробуй снова."
+
+    # Все попытки исчерпаны
+    logger.error(f"Yandex GPT: все {retries} попытки провалились. Последняя ошибка: {last_error}")
+    return f"⚠️ {last_error} Попробуй чуть позже."
+
+
+# ─────────────────────────────────────────────
+# ВСПОМОГАТЕЛЬНАЯ: продление индикатора "печатает"
+# ─────────────────────────────────────────────
+
+async def keep_typing(bot, chat_id: int, stop_event: asyncio.Event):
+    """
+    Каждые 4 секунды отправляет typing action пока не установлен stop_event.
+    Запускать через asyncio.create_task().
+    """
+    from telegram.constants import ChatAction
+    while not stop_event.is_set():
+        try:
+            await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        except Exception:
+            pass
+        await asyncio.sleep(4)
 
 
 # ─────────────────────────────────────────────
@@ -413,147 +489,34 @@ async def generate_actor_post() -> tuple:
 
 
 # ─────────────────────────────────────────────
-# ФИЛЬМОГРАФИЯ АЛЕКСАНДРА ПОТАПОВА
+# ФИЛЬМОГРАФИЯ
 # ─────────────────────────────────────────────
 
 FILMOGRAPHY = [
-    {
-        "title": "Эльбрус",
-        "year": "2026",
-        "role": "Гога",
-        "type": "сериал",
-        "note": "последняя работа, 2-й сезон",
-    },
-    {
-        "title": "Пять копеек",
-        "year": "2024",
-        "role": "сержант",
-        "type": "сериал",
-        "note": "комедийный сериал",
-    },
-    {
-        "title": "Наш спецназ",
-        "year": "2022",
-        "role": "Сократ",
-        "type": "сериал",
-        "note": "рейтинг 8.0",
-    },
-    {
-        "title": "Друг на час",
-        "year": "2022",
-        "role": "клиент Рокета",
-        "type": "сериал",
-        "note": "ТНТ, рейтинг 7.1",
-    },
-    {
-        "title": "Казнь",
-        "year": "2021",
-        "role": "криминалист",
-        "type": "сериал",
-        "note": "детектив, рейтинг 7.4",
-    },
-    {
-        "title": "Хорошие вещи",
-        "year": "2021",
-        "role": "",
-        "type": "фильм",
-        "note": "фестивальное кино",
-    },
-    {
-        "title": "Мятеж",
-        "year": "2020",
-        "role": "мародёр",
-        "type": "сериал",
-        "note": "драма, рейтинг 8.4",
-    },
-    {
-        "title": "Ваш Ваня",
-        "year": "2020",
-        "role": "",
-        "type": "сериал",
-        "note": "рейтинг 7.1",
-    },
-    {
-        "title": "Фемида видит",
-        "year": "2019",
-        "role": "оперативник",
-        "type": "сериал",
-        "note": "рейтинг 6.7",
-    },
-    {
-        "title": "Короче",
-        "year": "2019–2021",
-        "role": "",
-        "type": "сериал",
-        "note": "комедия, рейтинг 7.6",
-    },
-    {
-        "title": "Полярный",
-        "year": "2019",
-        "role": "бармен",
-        "type": "сериал",
-        "note": "рейтинг 8.2, продолжается",
-    },
-    {
-        "title": "Трудные подростки",
-        "year": "2019–2024",
-        "role": "Гарик",
-        "type": "сериал",
-        "note": "рейтинг 8.2",
-    },
-    {
-        "title": "Ключи",
-        "year": "2018",
-        "role": "",
-        "type": "фильм",
-        "note": "",
-    },
-    {
-        "title": "Полицейский с Рублёвки. Мы тебя найдём",
-        "year": "2018",
-        "role": "Степа",
-        "type": "сериал",
-        "note": "ТНТ, рейтинг 7.5",
-    },
-    {
-        "title": "Оптимисты",
-        "year": "2017",
-        "role": "хулиган",
-        "type": "сериал",
-        "note": "Россия-1, рейтинг 7.9",
-    },
-    {
-        "title": "Четвертая смена",
-        "year": "2017",
-        "role": "сотрудник аварийной службы",
-        "type": "сериал",
-        "note": "НТВ, рейтинг 7.4",
-    },
-    {
-        "title": "Полицейский с Рублёвки в Бескудниково",
-        "year": "2017",
-        "role": "гопник",
-        "type": "сериал",
-        "note": "рейтинг 7.9",
-    },
-    {
-        "title": "Охота на дьявола",
-        "year": "2017",
-        "role": "",
-        "type": "сериал",
-        "note": "рейтинг 7.8",
-    },
+    {"title": "Эльбрус", "year": "2026", "role": "Гога", "type": "сериал", "note": "последняя работа, 2-й сезон"},
+    {"title": "Пять копеек", "year": "2024", "role": "сержант", "type": "сериал", "note": "комедийный сериал"},
+    {"title": "Наш спецназ", "year": "2022", "role": "Сократ", "type": "сериал", "note": "рейтинг 8.0"},
+    {"title": "Друг на час", "year": "2022", "role": "клиент Рокета", "type": "сериал", "note": "ТНТ, рейтинг 7.1"},
+    {"title": "Казнь", "year": "2021", "role": "криминалист", "type": "сериал", "note": "детектив, рейтинг 7.4"},
+    {"title": "Хорошие вещи", "year": "2021", "role": "", "type": "фильм", "note": "фестивальное кино"},
+    {"title": "Мятеж", "year": "2020", "role": "мародёр", "type": "сериал", "note": "драма, рейтинг 8.4"},
+    {"title": "Ваш Ваня", "year": "2020", "role": "", "type": "сериал", "note": "рейтинг 7.1"},
+    {"title": "Фемида видит", "year": "2019", "role": "оперативник", "type": "сериал", "note": "рейтинг 6.7"},
+    {"title": "Короче", "year": "2019–2021", "role": "", "type": "сериал", "note": "комедия, рейтинг 7.6"},
+    {"title": "Полярный", "year": "2019", "role": "бармен", "type": "сериал", "note": "рейтинг 8.2, продолжается"},
+    {"title": "Трудные подростки", "year": "2019–2024", "role": "Гарик", "type": "сериал", "note": "рейтинг 8.2"},
+    {"title": "Ключи", "year": "2018", "role": "", "type": "фильм", "note": ""},
+    {"title": "Полицейский с Рублёвки. Мы тебя найдём", "year": "2018", "role": "Степа", "type": "сериал", "note": "ТНТ, рейтинг 7.5"},
+    {"title": "Оптимисты", "year": "2017", "role": "хулиган", "type": "сериал", "note": "Россия-1, рейтинг 7.9"},
+    {"title": "Четвертая смена", "year": "2017", "role": "сотрудник аварийной службы", "type": "сериал", "note": "НТВ, рейтинг 7.4"},
+    {"title": "Полицейский с Рублёвки в Бескудниково", "year": "2017", "role": "гопник", "type": "сериал", "note": "рейтинг 7.9"},
+    {"title": "Охота на дьявола", "year": "2017", "role": "", "type": "сериал", "note": "рейтинг 7.8"},
 ]
 
 _filmography_index = 0
 
 
 async def generate_filmography_post() -> tuple:
-    """
-    Пост от первого лица Александра Потапова о конкретном проекте
-    из его фильмографии. Каждый раз — новый проект по кругу.
-    Возвращает (текст, "").
-    """
     global _filmography_index
     project = FILMOGRAPHY[_filmography_index % len(FILMOGRAPHY)]
     _filmography_index += 1
@@ -606,20 +569,12 @@ def _kp_headers() -> dict:
 
 
 async def _kp_get_film_detail(client: httpx.AsyncClient, film_id: int) -> dict:
-    """Получает детали фильма по ID."""
-    r = await client.get(
-        f"{KINOPOISK_BASE}/api/v2.2/films/{film_id}",
-        headers=_kp_headers(),
-    )
+    r = await client.get(f"{KINOPOISK_BASE}/api/v2.2/films/{film_id}", headers=_kp_headers())
     return r.json() if r.status_code == 200 else {}
 
 
 async def _kp_get_videos(client: httpx.AsyncClient, film_id: int) -> str:
-    """Возвращает URL первого YouTube-трейлера или пустую строку."""
-    rv = await client.get(
-        f"{KINOPOISK_BASE}/api/v2.2/films/{film_id}/videos",
-        headers=_kp_headers(),
-    )
+    rv = await client.get(f"{KINOPOISK_BASE}/api/v2.2/films/{film_id}/videos", headers=_kp_headers())
     if rv.status_code != 200:
         return ""
     videos = rv.json().get("items", [])
@@ -636,7 +591,6 @@ async def _kp_get_videos(client: httpx.AsyncClient, film_id: int) -> str:
 
 
 async def _kp_fetch_top_films(client: httpx.AsyncClient, top_type: str, page: int) -> list:
-    """Получает список фильмов из топа."""
     r = await client.get(
         f"{KINOPOISK_BASE}/api/v2.2/films/top",
         headers=_kp_headers(),
@@ -658,15 +612,6 @@ async def _kp_fetch_films_by_genre(
     film_type: str = "FILM",
     page: int = 1,
 ) -> list:
-    """
-    Ищет фильмы по жанру через /api/v2.2/films.
-    genre_id: 1=триллер, 2=ужасы, 3=боевик, 5=документальный,
-              6=мелодрама, 7=спортивный, 10=фэнтези, 13=ужасы,
-              14=комедия, 15=анимация (мультфильм), 18=криминал,
-              19=драма, 22=фантастика, 25=приключения, 33=семейный
-    film_type: FILM, TV_SERIES, MINI_SERIES, TV_SHOW
-    order: RATING, NUM_VOTE, YEAR
-    """
     r = await client.get(
         f"{KINOPOISK_BASE}/api/v2.2/films",
         headers=_kp_headers(),
@@ -689,27 +634,21 @@ async def _kp_fetch_films_by_genre(
 
 
 def _extract_film_base(film: dict) -> dict:
-    """Извлекает базовые поля из объекта фильма (формат top или search)."""
     film_id = film.get("filmId") or film.get("kinopoiskId")
     title = film.get("nameRu") or film.get("nameEn") or "Без названия"
     year = film.get("year", "")
     poster_url = film.get("posterUrlPreview") or film.get("posterUrl") or ""
-    genres = ", ".join(
-        g["genre"] for g in (film.get("genres") or [])[:3] if g.get("genre")
-    )
+    genres = ", ".join(g["genre"] for g in (film.get("genres") or [])[:3] if g.get("genre"))
     return {"id": film_id, "title": title, "year": year, "poster": poster_url, "genres": genres}
 
 
 # ─────────────────────────────────────────────
-# КИНОПОИСК — трейлер (существующий)
+# КИНОПОИСК — трейлер, сериал, новинка, мультфильм, постер
 # ─────────────────────────────────────────────
 
 async def fetch_kinopoisk_trailer() -> dict:
-    """TOP-250/TOP-100 → ищет фильм с YouTube-трейлером."""
     if not KINOPOISK_API_KEY:
-        logger.warning("KINOPOISK_API_KEY не задан!")
         return {}
-
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             top_type = random.choice(["TOP_250_BEST_FILMS", "TOP_100_POPULAR_FILMS"])
@@ -717,280 +656,142 @@ async def fetch_kinopoisk_trailer() -> dict:
             films = await _kp_fetch_top_films(client, top_type, page)
             if not films:
                 return {}
-
             random.shuffle(films)
             for film in films[:10]:
                 base = _extract_film_base(film)
                 if not base["id"]:
                     continue
-
                 detail = await _kp_get_film_detail(client, base["id"])
-                description = (
-                    detail.get("description") or detail.get("shortDescription") or ""
-                )
+                description = detail.get("description") or detail.get("shortDescription") or ""
                 poster_url = detail.get("posterUrl") or base["poster"]
-
                 trailer_url = await _kp_get_videos(client, base["id"])
                 if not trailer_url:
-                    logger.warning(f"Для '{base['title']}' нет трейлера, пробую следующий...")
                     continue
-
-                logger.info(f"Кинопоиск трейлер: «{base['title']}» ({base['year']})")
                 return {
-                    "title": base["title"],
-                    "description": description,
-                    "poster_url": poster_url,
-                    "trailer_url": trailer_url,
-                    "year": base["year"],
-                    "genres": base["genres"],
+                    "title": base["title"], "description": description,
+                    "poster_url": poster_url, "trailer_url": trailer_url,
+                    "year": base["year"], "genres": base["genres"],
                 }
-
-        logger.warning("Кинопоиск: ни один кандидат не имеет трейлера")
         return {}
     except Exception as e:
         logger.error(f"Kinopoisk trailer exception: {e}")
         return {}
 
 
-# ─────────────────────────────────────────────
-# КИНОПОИСК — сериалы
-# ─────────────────────────────────────────────
-
 async def fetch_kinopoisk_series() -> dict:
-    """
-    Получает случайный популярный сериал (TV_SERIES / MINI_SERIES).
-    Использует /api/v2.2/films с фильтром type=TV_SERIES.
-    """
     if not KINOPOISK_API_KEY:
-        logger.warning("KINOPOISK_API_KEY не задан!")
         return {}
-
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             page = random.randint(1, 5)
-            # Чередуем: обычные сериалы и мини-сериалы
             series_type = random.choice(["TV_SERIES", "MINI_SERIES"])
-            items = await _kp_fetch_films_by_genre(
-                client, genre_id=19,  # драма — широкий охват
-                order="RATING",
-                film_type=series_type,
-                page=page,
-            )
-            # Если мало результатов — пробуем другой жанр
+            items = await _kp_fetch_films_by_genre(client, genre_id=19, order="RATING", film_type=series_type, page=page)
             if len(items) < 3:
-                items = await _kp_fetch_films_by_genre(
-                    client, genre_id=14,  # комедия
-                    order="RATING",
-                    film_type=series_type,
-                    page=1,
-                )
-
+                items = await _kp_fetch_films_by_genre(client, genre_id=14, order="RATING", film_type=series_type, page=1)
             if not items:
-                logger.warning("Кинопоиск сериалы: пустой список")
                 return {}
-
             random.shuffle(items)
             for item in items[:8]:
                 base = _extract_film_base(item)
                 if not base["id"]:
                     continue
-
                 detail = await _kp_get_film_detail(client, base["id"])
                 if not detail:
                     continue
-
-                description = (
-                    detail.get("description") or detail.get("shortDescription") or ""
-                )
-                poster_url = detail.get("posterUrl") or base["poster"]
-                rating = detail.get("ratingKinopoisk") or detail.get("ratingImdb") or ""
-                seasons = detail.get("seasonsCount", "")
-                series_length = detail.get("serial", False)
-
+                description = detail.get("description") or detail.get("shortDescription") or ""
                 if not description:
                     continue
-
-                logger.info(f"Кинопоиск сериал: «{base['title']}» ({base['year']})")
                 return {
-                    "title": base["title"],
-                    "description": description,
-                    "poster_url": poster_url,
-                    "year": base["year"],
-                    "genres": base["genres"],
-                    "rating": rating,
-                    "seasons": seasons,
-                    "is_series": True,
+                    "title": base["title"], "description": description,
+                    "poster_url": detail.get("posterUrl") or base["poster"],
+                    "year": base["year"], "genres": base["genres"],
+                    "rating": detail.get("ratingKinopoisk") or detail.get("ratingImdb") or "",
+                    "seasons": detail.get("seasonsCount", ""), "is_series": True,
                 }
-
-        logger.warning("Кинопоиск: сериал не найден")
         return {}
     except Exception as e:
         logger.error(f"Kinopoisk series exception: {e}")
         return {}
 
 
-# ─────────────────────────────────────────────
-# КИНОПОИСК — новинки кино
-# ─────────────────────────────────────────────
-
 async def fetch_kinopoisk_new_film() -> dict:
-    """
-    Получает свежий фильм из TOP_AWAIT_FILMS (ожидаемые) или
-    из TOP_100_POPULAR_FILMS с фильтром по году.
-    """
     if not KINOPOISK_API_KEY:
-        logger.warning("KINOPOISK_API_KEY не задан!")
         return {}
-
     import datetime
     current_year = datetime.datetime.now().year
-
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            # Сначала пробуем ожидаемые новинки
             films = await _kp_fetch_top_films(client, "TOP_AWAIT_FILMS", page=1)
-
-            # Если нет — берём популярные текущего/прошлого года
             if not films:
                 r = await client.get(
-                    f"{KINOPOISK_BASE}/api/v2.2/films",
-                    headers=_kp_headers(),
-                    params={
-                        "order": "YEAR",
-                        "type": "FILM",
-                        "ratingFrom": 6,
-                        "yearFrom": current_year - 1,
-                        "yearTo": current_year,
-                        "page": random.randint(1, 3),
-                    },
+                    f"{KINOPOISK_BASE}/api/v2.2/films", headers=_kp_headers(),
+                    params={"order": "YEAR", "type": "FILM", "ratingFrom": 6,
+                            "yearFrom": current_year - 1, "yearTo": current_year,
+                            "page": random.randint(1, 3)},
                 )
                 if r.status_code == 200:
                     films = r.json().get("items", [])
-
             if not films:
-                logger.warning("Кинопоиск новинки: пустой список")
                 return {}
-
             random.shuffle(films)
             for film in films[:10]:
                 base = _extract_film_base(film)
                 if not base["id"]:
                     continue
-
                 detail = await _kp_get_film_detail(client, base["id"])
-                description = (
-                    detail.get("description") or detail.get("shortDescription") or ""
-                )
-                poster_url = detail.get("posterUrl") or base["poster"]
-                rating = detail.get("ratingKinopoisk") or detail.get("ratingImdb") or ""
-                trailer_url = await _kp_get_videos(client, base["id"])
-
+                description = detail.get("description") or detail.get("shortDescription") or ""
                 if not description:
                     continue
-
-                logger.info(f"Кинопоиск новинка: «{base['title']}» ({base['year']})")
+                trailer_url = await _kp_get_videos(client, base["id"])
                 return {
-                    "title": base["title"],
-                    "description": description,
-                    "poster_url": poster_url,
-                    "trailer_url": trailer_url,
-                    "year": base["year"],
-                    "genres": base["genres"],
-                    "rating": rating,
+                    "title": base["title"], "description": description,
+                    "poster_url": detail.get("posterUrl") or base["poster"],
+                    "trailer_url": trailer_url, "year": base["year"], "genres": base["genres"],
+                    "rating": detail.get("ratingKinopoisk") or detail.get("ratingImdb") or "",
                 }
-
-        logger.warning("Кинопоиск: новинка не найдена")
         return {}
     except Exception as e:
         logger.error(f"Kinopoisk new film exception: {e}")
         return {}
 
 
-# ─────────────────────────────────────────────
-# КИНОПОИСК — мультфильмы
-# ─────────────────────────────────────────────
-
 async def fetch_kinopoisk_cartoon() -> dict:
-    """
-    Получает случайный мультфильм (жанр 15 = анимация).
-    """
     if not KINOPOISK_API_KEY:
-        logger.warning("KINOPOISK_API_KEY не задан!")
         return {}
-
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             page = random.randint(1, 5)
-            # Ищем как полнометражные мультфильмы, так и сериалы
             film_type = random.choice(["FILM", "TV_SERIES", "MINI_SERIES"])
-            items = await _kp_fetch_films_by_genre(
-                client, genre_id=15,  # анимация / мультфильм
-                order="RATING",
-                film_type=film_type,
-                page=page,
-            )
-
+            items = await _kp_fetch_films_by_genre(client, genre_id=15, order="RATING", film_type=film_type, page=page)
             if not items:
-                # Пробуем на 1-й странице с типом FILM
-                items = await _kp_fetch_films_by_genre(
-                    client, genre_id=15,
-                    order="NUM_VOTE",
-                    film_type="FILM",
-                    page=1,
-                )
-
+                items = await _kp_fetch_films_by_genre(client, genre_id=15, order="NUM_VOTE", film_type="FILM", page=1)
             if not items:
-                logger.warning("Кинопоиск мультфильмы: пустой список")
                 return {}
-
             random.shuffle(items)
             for item in items[:10]:
                 base = _extract_film_base(item)
                 if not base["id"]:
                     continue
-
                 detail = await _kp_get_film_detail(client, base["id"])
-                description = (
-                    detail.get("description") or detail.get("shortDescription") or ""
-                )
-                poster_url = detail.get("posterUrl") or base["poster"]
-                rating = detail.get("ratingKinopoisk") or detail.get("ratingImdb") or ""
-                trailer_url = await _kp_get_videos(client, base["id"])
-
+                description = detail.get("description") or detail.get("shortDescription") or ""
                 if not description:
                     continue
-
-                logger.info(f"Кинопоиск мультфильм: «{base['title']}» ({base['year']})")
+                trailer_url = await _kp_get_videos(client, base["id"])
                 return {
-                    "title": base["title"],
-                    "description": description,
-                    "poster_url": poster_url,
-                    "trailer_url": trailer_url,
-                    "year": base["year"],
-                    "genres": base["genres"],
-                    "rating": rating,
+                    "title": base["title"], "description": description,
+                    "poster_url": detail.get("posterUrl") or base["poster"],
+                    "trailer_url": trailer_url, "year": base["year"], "genres": base["genres"],
+                    "rating": detail.get("ratingKinopoisk") or detail.get("ratingImdb") or "",
                 }
-
-        logger.warning("Кинопоиск: мультфильм не найден")
         return {}
     except Exception as e:
         logger.error(f"Kinopoisk cartoon exception: {e}")
         return {}
 
 
-# ─────────────────────────────────────────────
-# КИНОПОИСК — постер (обои)
-# ─────────────────────────────────────────────
-
 async def fetch_kinopoisk_poster() -> dict:
-    """
-    Получает красивый постер из TOP-250 или TOP-100.
-    Возвращает фильм с наилучшим poster_url.
-    """
     if not KINOPOISK_API_KEY:
-        logger.warning("KINOPOISK_API_KEY не задан!")
         return {}
-
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             top_type = random.choice(["TOP_250_BEST_FILMS", "TOP_100_POPULAR_FILMS"])
@@ -998,38 +799,23 @@ async def fetch_kinopoisk_poster() -> dict:
             films = await _kp_fetch_top_films(client, top_type, page)
             if not films:
                 return {}
-
             random.shuffle(films)
             for film in films[:15]:
                 base = _extract_film_base(film)
                 if not base["id"]:
                     continue
-
                 detail = await _kp_get_film_detail(client, base["id"])
-                # Предпочитаем полноразмерный постер
                 poster_url = detail.get("posterUrl") or base["poster"]
-                description = (
-                    detail.get("description") or detail.get("shortDescription") or ""
-                )
-                rating = detail.get("ratingKinopoisk") or detail.get("ratingImdb") or ""
-
-                # Постер должен быть полноразмерным (не preview)
                 if not poster_url or "preview" in poster_url.lower():
                     poster_url = detail.get("posterUrl") or ""
                 if not poster_url:
                     continue
-
-                logger.info(f"Кинопоиск постер: «{base['title']}» ({base['year']})")
                 return {
                     "title": base["title"],
-                    "description": description,
-                    "poster_url": poster_url,
-                    "year": base["year"],
-                    "genres": base["genres"],
-                    "rating": rating,
+                    "description": detail.get("description") or detail.get("shortDescription") or "",
+                    "poster_url": poster_url, "year": base["year"], "genres": base["genres"],
+                    "rating": detail.get("ratingKinopoisk") or detail.get("ratingImdb") or "",
                 }
-
-        logger.warning("Кинопоиск: постер не найден")
         return {}
     except Exception as e:
         logger.error(f"Kinopoisk poster exception: {e}")
@@ -1041,45 +827,32 @@ async def fetch_kinopoisk_poster() -> dict:
 # ─────────────────────────────────────────────
 
 async def generate_trailer_post() -> tuple:
-    """Возвращает (текст, poster_url) для поста с трейлером."""
-    logger.info("Трейлер: запрашиваю фильм из Кинопоиска...")
     movie = await fetch_kinopoisk_trailer()
     if not movie:
         return "", ""
-
     system = (
         "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН. "
         "Пишешь анонс трейлера — интригующе, с любовью к кино. "
         "Отвечай ТОЛЬКО текстом поста — без пояснений, без markdown."
     )
     user_msg = (
-        f"Фильм: «{movie['title']}» ({movie['year']})\n"
-        f"Жанры: {movie['genres']}\n"
+        f"Фильм: «{movie['title']}» ({movie['year']})\nЖанры: {movie['genres']}\n"
         f"Описание: {movie['description']}\n\n"
         "Напиши анонс-пост для Telegram-канала.\n"
-        "Требования:\n"
-        "— 80–120 слов\n"
-        "— Интригующий стиль, заинтересуй читателя\n"
-        "— 1–2 эмодзи в начале\n"
+        "— 80–120 слов\n— Интригующий стиль\n— 1–2 эмодзи в начале\n"
         f"— В конце отдельной строкой: ▶️ Смотреть трейлер: {movie['trailer_url']}\n"
-        "— Хэштеги: #трейлер #кино #кислородпродакшен\n"
-        "— Только текст поста на русском языке"
+        "— Хэштеги: #трейлер #кино #кислородпродакшен\n— Только текст на русском"
     )
-
     text = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
     return text, movie["poster_url"]
 
 
 async def generate_series_post() -> tuple:
-    """Возвращает (текст, poster_url) для поста о сериале."""
-    logger.info("Сериал: запрашиваю из Кинопоиска...")
     series = await fetch_kinopoisk_series()
     if not series:
         return "", ""
-
     rating_str = f"⭐ {series['rating']}" if series.get("rating") else ""
     seasons_str = f"• {series['seasons']} сезонов" if series.get("seasons") else ""
-
     system = (
         "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН. "
         "Пишешь рекомендательный пост о сериале — увлекательно и по делу. "
@@ -1087,32 +860,20 @@ async def generate_series_post() -> tuple:
     )
     user_msg = (
         f"Сериал: «{series['title']}» ({series['year']}) {rating_str} {seasons_str}\n"
-        f"Жанры: {series['genres']}\n"
-        f"Описание: {series['description']}\n\n"
-        "Напиши рекомендательный пост для Telegram-канала.\n"
-        "Требования:\n"
-        "— 100–150 слов\n"
-        "— Стиль: живой, как совет другу\n"
-        "— Скажи, почему стоит смотреть\n"
-        "— 1–2 эмодзи в начале\n"
-        "— Хэштеги в конце: #сериал #кино #рекомендация #кислородпродакшен\n"
-        "— Только текст поста на русском языке"
+        f"Жанры: {series['genres']}\nОписание: {series['description']}\n\n"
+        "— 100–150 слов\n— Стиль: живой, как совет другу\n— Скажи, почему стоит смотреть\n"
+        "— 1–2 эмодзи в начале\n— Хэштеги: #сериал #кино #рекомендация #кислородпродакшен"
     )
-
     text = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
     return text, series["poster_url"]
 
 
 async def generate_new_film_post() -> tuple:
-    """Возвращает (текст, poster_url) для поста о новинке кино."""
-    logger.info("Новинка кино: запрашиваю из Кинопоиска...")
     film = await fetch_kinopoisk_new_film()
     if not film:
         return "", ""
-
     rating_str = f"⭐ {film['rating']}" if film.get("rating") else ""
     trailer_line = f"\n▶️ Трейлер: {film['trailer_url']}" if film.get("trailer_url") else ""
-
     system = (
         "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН. "
         "Пишешь анонс новинки кино — с интригой и вдохновением. "
@@ -1120,32 +881,20 @@ async def generate_new_film_post() -> tuple:
     )
     user_msg = (
         f"Новинка: «{film['title']}» ({film['year']}) {rating_str}\n"
-        f"Жанры: {film['genres']}\n"
-        f"Описание: {film['description']}\n\n"
-        "Напиши анонс-пост о новинке кино для Telegram-канала.\n"
-        "Требования:\n"
-        "— 100–150 слов\n"
-        "— Заинтригуй, не пересказывай сюжет полностью\n"
-        "— 1–2 эмодзи в начале\n"
-        f"— Если есть трейлер, добавь в конце отдельной строкой:{trailer_line}\n"
-        "— Хэштеги: #новинка #кино #премьера #кислородпродакшен\n"
-        "— Только текст поста на русском языке"
+        f"Жанры: {film['genres']}\nОписание: {film['description']}\n\n"
+        "— 100–150 слов\n— Заинтригуй, не пересказывай сюжет полностью\n— 1–2 эмодзи в начале\n"
+        f"— Если есть трейлер:{trailer_line}\n— Хэштеги: #новинка #кино #премьера #кислородпродакшен"
     )
-
     text = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
     return text, film["poster_url"]
 
 
 async def generate_cartoon_post() -> tuple:
-    """Возвращает (текст, poster_url) для поста о мультфильме."""
-    logger.info("Мультфильм: запрашиваю из Кинопоиска...")
     cartoon = await fetch_kinopoisk_cartoon()
     if not cartoon:
         return "", ""
-
     rating_str = f"⭐ {cartoon['rating']}" if cartoon.get("rating") else ""
     trailer_line = f"\n▶️ Трейлер: {cartoon['trailer_url']}" if cartoon.get("trailer_url") else ""
-
     system = (
         "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН — студии, создающей мультфильмы с AI. "
         "Пишешь пост о мультфильме — с теплотой, вдохновляя любовь к анимации. "
@@ -1153,50 +902,30 @@ async def generate_cartoon_post() -> tuple:
     )
     user_msg = (
         f"Мультфильм: «{cartoon['title']}» ({cartoon['year']}) {rating_str}\n"
-        f"Жанры: {cartoon['genres']}\n"
-        f"Описание: {cartoon['description']}\n\n"
-        "Напиши пост о мультфильме для Telegram-канала.\n"
-        "Требования:\n"
-        "— 100–150 слов\n"
-        "— Тёплый, воодушевляющий стиль\n"
-        "— Расскажи, чем мультфильм особенный\n"
-        "— 1–2 эмодзи в начале (например 🎨✨)\n"
-        f"— Если есть трейлер, добавь в конце:{trailer_line}\n"
-        "— Хэштеги: #мультфильм #анимация #кислородпродакшен #кино\n"
-        "— Только текст поста на русском языке"
+        f"Жанры: {cartoon['genres']}\nОписание: {cartoon['description']}\n\n"
+        "— 100–150 слов\n— Тёплый, воодушевляющий стиль\n— 1–2 эмодзи (например 🎨✨)\n"
+        f"— Если есть трейлер:{trailer_line}\n— Хэштеги: #мультфильм #анимация #кислородпродакшен #кино"
     )
-
     text = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
     return text, cartoon["poster_url"]
 
 
 async def generate_poster_post() -> tuple:
-    """Возвращает (текст, poster_url) — красивый постер с коротким описанием."""
-    logger.info("Постер: запрашиваю из Кинопоиска...")
     movie = await fetch_kinopoisk_poster()
     if not movie:
         return "", ""
-
     rating_str = f"⭐ {movie['rating']}" if movie.get("rating") else ""
-
     system = (
         "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН. "
-        "Пишешь короткий подпись-пост к постеру фильма — лаконично и атмосферно. "
+        "Пишешь короткую подпись к постеру фильма — лаконично и атмосферно. "
         "Отвечай ТОЛЬКО текстом поста — без пояснений, без markdown."
     )
     user_msg = (
         f"Фильм: «{movie['title']}» ({movie['year']}) {rating_str}\n"
-        f"Жанры: {movie['genres']}\n"
-        f"Описание: {movie['description']}\n\n"
-        "Напиши короткую подпись к постеру для Telegram-канала.\n"
-        "Требования:\n"
-        "— 40–70 слов — КОРОТКО и атмосферно\n"
-        "— Цепляющая первая строка\n"
-        "— 1 эмодзи\n"
-        "— Хэштеги: #постер #кино #кислородпродакшен\n"
-        "— Только текст на русском языке"
+        f"Жанры: {movie['genres']}\nОписание: {movie['description']}\n\n"
+        "— 40–70 слов — КОРОТКО и атмосферно\n— Цепляющая первая строка\n— 1 эмодзи\n"
+        "— Хэштеги: #постер #кино #кислородпродакшен"
     )
-
     text = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
     return text, movie["poster_url"]
 
@@ -1207,7 +936,7 @@ async def generate_poster_post() -> tuple:
 
 async def send_post(bot, channel: str, text: str, image_url: str = ""):
     """Отправляет пост. С фото если есть image_url, иначе текст."""
-    if not text or text.startswith("Ошибка"):
+    if not text or text.startswith("Ошибка") or text.startswith("⚠️"):
         logger.error(f"Некорректный текст поста: {text[:80]}")
         return
     try:
@@ -1227,37 +956,20 @@ async def send_post(bot, channel: str, text: str, image_url: str = ""):
 # ─────────────────────────────────────────────
 # JOB FUNCTIONS — расписание
 # ─────────────────────────────────────────────
-# МСК = UTC+3
-#
-# @realtimeproductionn:
-#   10:00 (07 UTC) — новости кино
-#   12:00 (09 UTC) — новинка кино  ← НОВОЕ
-#   14:00 (11 UTC) — трейлер
-#   16:00 (13 UTC) — мультфильм    ← НОВОЕ
-#   19:00 (16 UTC) — новости вечер
-#   21:00 (18 UTC) — постер        ← НОВОЕ
-#
-# @actorsashapotapovv:
-#   11:00 (08 UTC) — актёр утро
-#   15:00 (12 UTC) — сериал        ← НОВОЕ
-#   20:00 (17 UTC) — актёр вечер
 
 async def job_kislorod_morning(context: ContextTypes.DEFAULT_TYPE):
     text, img = await generate_kislorod_post()
     await send_post(context.bot, CHANNEL_KISLOROD, text, img)
 
 async def job_kislorod_new_film(context: ContextTypes.DEFAULT_TYPE):
-    """12:00 МСК — новинка кино в @realtimeproductionn"""
     text, img = await generate_new_film_post()
     if text:
         await send_post(context.bot, CHANNEL_KISLOROD, text, img)
     else:
-        # Фолбэк: обычные новости
         text2, img2 = await generate_kislorod_post()
         await send_post(context.bot, CHANNEL_KISLOROD, text2, img2)
 
 async def job_kislorod_trailer(context: ContextTypes.DEFAULT_TYPE):
-    """14:00 МСК — трейлер в оба канала"""
     text, poster = await generate_trailer_post()
     if text:
         await send_post(context.bot, CHANNEL_KISLOROD, text, poster)
@@ -1267,7 +979,6 @@ async def job_kislorod_trailer(context: ContextTypes.DEFAULT_TYPE):
         await send_post(context.bot, CHANNEL_KISLOROD, text2, img2)
 
 async def job_kislorod_cartoon(context: ContextTypes.DEFAULT_TYPE):
-    """16:00 МСК — мультфильм в @realtimeproductionn"""
     text, img = await generate_cartoon_post()
     if text:
         await send_post(context.bot, CHANNEL_KISLOROD, text, img)
@@ -1276,12 +987,10 @@ async def job_kislorod_cartoon(context: ContextTypes.DEFAULT_TYPE):
         await send_post(context.bot, CHANNEL_KISLOROD, text2, img2)
 
 async def job_kislorod_evening(context: ContextTypes.DEFAULT_TYPE):
-    """19:00 МСК — вечерние новости в @realtimeproductionn"""
     text, img = await generate_kislorod_post()
     await send_post(context.bot, CHANNEL_KISLOROD, text, img)
 
 async def job_kislorod_poster(context: ContextTypes.DEFAULT_TYPE):
-    """21:00 МСК — постер в @realtimeproductionn"""
     text, img = await generate_poster_post()
     if text:
         await send_post(context.bot, CHANNEL_KISLOROD, text, img)
@@ -1290,12 +999,10 @@ async def job_kislorod_poster(context: ContextTypes.DEFAULT_TYPE):
         await send_post(context.bot, CHANNEL_KISLOROD, text2, img2)
 
 async def job_actor_morning(context: ContextTypes.DEFAULT_TYPE):
-    """11:00 МСК — актёр утро"""
     text, img = await generate_actor_post()
     await send_post(context.bot, CHANNEL_ACTOR, text, img)
 
 async def job_actor_series(context: ContextTypes.DEFAULT_TYPE):
-    """15:00 МСК — сериал в @actorsashapotapovv"""
     text, img = await generate_series_post()
     if text:
         await send_post(context.bot, CHANNEL_ACTOR, text, img)
@@ -1304,12 +1011,10 @@ async def job_actor_series(context: ContextTypes.DEFAULT_TYPE):
         await send_post(context.bot, CHANNEL_ACTOR, text2, img2)
 
 async def job_actor_evening(context: ContextTypes.DEFAULT_TYPE):
-    """20:00 МСК — актёр вечер"""
     text, img = await generate_actor_post()
     await send_post(context.bot, CHANNEL_ACTOR, text, img)
 
 async def job_actor_filmography(context: ContextTypes.DEFAULT_TYPE):
-    """13:00 МСК — пост о проекте из фильмографии в @actorsashapotapovv"""
     text, img = await generate_filmography_post()
     if text:
         await send_post(context.bot, CHANNEL_ACTOR, text, img)
@@ -1328,7 +1033,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎬 КИСЛОРОД ПРОДАКШЕН — AI АССИСТЕНТ\n\n"
         "Творческая AI-студия нового поколения.\n"
         "Мультфильмы • Клипы • Сериалы • Реклама\n\n"
-        "Нажми кнопку 📋 Меню внизу экрана, чтобы выбрать роль:",
+        "Здесь ты можешь общаться с AI-наставником в своей роли:\n"
+        "🎭 Актёр — подготовка к ролям, разбор проб\n"
+        "🎬 Режиссёр — концепции, раскадровки, визуальный стиль\n"
+        "✍️ Сценарист — сюжеты, диалоги, персонажи\n"
+        "💼 Продюсер — питч, бюджет, производственный план\n"
+        "🤝 Заказчик — ТЗ, бриф, креативная концепция\n\n"
+        "👇 Нажми кнопку 📋 Меню чтобы выбрать роль и начать:",
         reply_markup=webapp_keyboard(),
     )
 
@@ -1398,21 +1109,47 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     history = context.user_data.get("history", [])
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    history.append({"role": "user", "text": user_text})
-    response = await ask_yandex_gpt(ROLE_PROMPTS[role_key]["system"], history)
+    chat_id = update.effective_chat.id
+
+    # Запускаем фоновый typing-индикатор
+    stop_typing = asyncio.Event()
+    typing_task = asyncio.create_task(keep_typing(context.bot, chat_id, stop_typing))
+
+    try:
+        history.append({"role": "user", "text": user_text})
+        response = await ask_yandex_gpt(ROLE_PROMPTS[role_key]["system"], history)
+    finally:
+        # Останавливаем typing в любом случае
+        stop_typing.set()
+        typing_task.cancel()
+        try:
+            await typing_task
+        except asyncio.CancelledError:
+            pass
+
+    # Fallback если ответ пустой или ошибка
+    if not response or not response.strip():
+        response = "Не смог сформулировать ответ. Попробуй переформулировать вопрос или очисти историю чата."
+
     history.append({"role": "assistant", "text": response})
     context.user_data["history"] = history[-30:]
     await update.message.reply_text(response, reply_markup=chat_keyboard())
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+    user_id = update.effective_user.id
+    is_admin = user_id in ADMIN_IDS
+
+    base_text = (
         "🎬 КИСЛОРОД AI — Справка\n\n"
         "/start          — Открыть меню\n"
         "/clear          — Очистить историю чата\n"
-        "/schedule       — Расписание автопостинга\n"
-        "/help           — Справка\n\n"
+        "/help           — Справка\n"
+    )
+
+    admin_text = (
+        "\n── Только для администратора ──\n"
+        "/schedule       — Расписание автопостинга\n\n"
         "📰 Новостные посты:\n"
         "/post_now       — Новости кино (оба канала)\n\n"
         "🎬 Кинопоиск:\n"
@@ -1422,12 +1159,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/cartoon_now    — Пост о мультфильме\n"
         "/poster_now     — Красивый постер\n\n"
         "🎭 Личные посты Александра:\n"
-        "/myfilm_now     — Пост о проекте из фильмографии\n\n"
-        "Контакты:\n"
-        "📧 actorsashapotapov@gmail.com\n"
-        "💬 @actorsashapotapov",
-        reply_markup=webapp_keyboard(),
+        "/myfilm_now     — Пост о проекте из фильмографии\n"
     )
+
+    footer = (
+        "\nКонтакты:\n"
+        "📧 actorsashapotapov@gmail.com\n"
+        "💬 @actorsashapotapov"
+    )
+
+    full_text = base_text + (admin_text if is_admin else "") + footer
+    await update.message.reply_text(full_text, reply_markup=webapp_keyboard())
 
 
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1438,6 +1180,7 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+@admin_only
 async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📅 Расписание автопостинга (МСК):\n\n"
@@ -1458,6 +1201,7 @@ async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+@admin_only
 async def post_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Генерирую новостные посты (~20 сек)...")
     text1, img1 = await generate_kislorod_post()
@@ -1467,6 +1211,7 @@ async def post_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Новостные посты опубликованы!")
 
 
+@admin_only
 async def trailer_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Ищу свежий трейлер в Кинопоиске (~15 сек)...")
     text, poster = await generate_trailer_post()
@@ -1481,6 +1226,7 @@ async def trailer_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
 
+@admin_only
 async def film_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Ищу новинку кино (~15 сек)...")
     text, img = await generate_new_film_post()
@@ -1488,12 +1234,10 @@ async def film_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_post(context.bot, CHANNEL_KISLOROD, text, img)
         await update.message.reply_text("✅ Новинка кино опубликована в @realtimeproductionn!")
     else:
-        await update.message.reply_text(
-            "❌ Не удалось получить новинку кино.\n"
-            "Проверь KINOPOISK_API_KEY."
-        )
+        await update.message.reply_text("❌ Не удалось получить новинку кино.\nПроверь KINOPOISK_API_KEY.")
 
 
+@admin_only
 async def series_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Ищу сериал (~15 сек)...")
     text, img = await generate_series_post()
@@ -1501,12 +1245,10 @@ async def series_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await send_post(context.bot, CHANNEL_ACTOR, text, img)
         await update.message.reply_text("✅ Пост о сериале опубликован в @actorsashapotapovv!")
     else:
-        await update.message.reply_text(
-            "❌ Не удалось получить сериал.\n"
-            "Проверь KINOPOISK_API_KEY."
-        )
+        await update.message.reply_text("❌ Не удалось получить сериал.\nПроверь KINOPOISK_API_KEY.")
 
 
+@admin_only
 async def cartoon_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Ищу мультфильм (~15 сек)...")
     text, img = await generate_cartoon_post()
@@ -1514,12 +1256,10 @@ async def cartoon_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await send_post(context.bot, CHANNEL_KISLOROD, text, img)
         await update.message.reply_text("✅ Пост о мультфильме опубликован в @realtimeproductionn!")
     else:
-        await update.message.reply_text(
-            "❌ Не удалось получить мультфильм.\n"
-            "Проверь KINOPOISK_API_KEY."
-        )
+        await update.message.reply_text("❌ Не удалось получить мультфильм.\nПроверь KINOPOISK_API_KEY.")
 
 
+@admin_only
 async def poster_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Ищу красивый постер (~15 сек)...")
     text, img = await generate_poster_post()
@@ -1527,12 +1267,10 @@ async def poster_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await send_post(context.bot, CHANNEL_KISLOROD, text, img)
         await update.message.reply_text("✅ Постер опубликован в @realtimeproductionn!")
     else:
-        await update.message.reply_text(
-            "❌ Не удалось получить постер.\n"
-            "Проверь KINOPOISK_API_KEY."
-        )
+        await update.message.reply_text("❌ Не удалось получить постер.\nПроверь KINOPOISK_API_KEY.")
 
 
+@admin_only
 async def myfilm_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Пишу пост о твоём проекте (~15 сек)...")
     text, img = await generate_filmography_post()
@@ -1554,16 +1292,17 @@ def main():
     logger.info(f"YANDEX_FOLDER_ID:  {YANDEX_FOLDER_ID         or  '❌ НЕ ЗАДАН'}")
     logger.info(f"NEWS_API_KEY:      {'✅' if NEWS_API_KEY      else '❌ НЕ ЗАДАН'}")
     logger.info(f"KINOPOISK_API_KEY: {'✅' if KINOPOISK_API_KEY else '❌ НЕ ЗАДАН'}")
+    logger.info(f"ADMIN_IDS:         {ADMIN_IDS}")
 
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Команды чата
+    # Команды чата (для всех)
     app.add_handler(CommandHandler("start",        start))
     app.add_handler(CommandHandler("help",         help_command))
     app.add_handler(CommandHandler("clear",        clear_command))
-    app.add_handler(CommandHandler("schedule",     schedule_command))
 
-    # Команды постинга
+    # Команды только для админа
+    app.add_handler(CommandHandler("schedule",     schedule_command))
     app.add_handler(CommandHandler("post_now",     post_now_command))
     app.add_handler(CommandHandler("trailer_now",  trailer_now_command))
     app.add_handler(CommandHandler("film_now",     film_now_command))
@@ -1578,22 +1317,20 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # ── Расписание (UTC = МСК − 3) ──────────────────────────────────
-    # @realtimeproductionn
     app.job_queue.run_daily(job_kislorod_morning,   time=dtime(7,  0))  # 10:00 МСК
     app.job_queue.run_daily(job_kislorod_new_film,  time=dtime(9,  0))  # 12:00 МСК
     app.job_queue.run_daily(job_kislorod_trailer,   time=dtime(11, 0))  # 14:00 МСК
     app.job_queue.run_daily(job_kislorod_cartoon,   time=dtime(13, 0))  # 16:00 МСК
     app.job_queue.run_daily(job_kislorod_evening,   time=dtime(16, 0))  # 19:00 МСК
     app.job_queue.run_daily(job_kislorod_poster,    time=dtime(18, 0))  # 21:00 МСК
-    # @actorsashapotapovv
     app.job_queue.run_daily(job_actor_morning,      time=dtime(8,  0))  # 11:00 МСК
-    app.job_queue.run_daily(job_actor_filmography,  time=dtime(10, 0))  # 13:00 МСК ← NEW
+    app.job_queue.run_daily(job_actor_filmography,  time=dtime(10, 0))  # 13:00 МСК
     app.job_queue.run_daily(job_actor_series,       time=dtime(12, 0))  # 15:00 МСК
     app.job_queue.run_daily(job_actor_evening,      time=dtime(17, 0))  # 20:00 МСК
 
     logger.info("=== Расписание ===")
-    logger.info("@realtimeproductionn: 07/09/11/13/16/18 UTC (10/12/14/16/19/21 МСК)")
-    logger.info("@actorsashapotapovv:  08/12/17 UTC (11/15/20 МСК)")
+    logger.info("@realtimeproductionn: 07/09/11/13/16/18 UTC")
+    logger.info("@actorsashapotapovv:  08/10/12/17 UTC")
     logger.info("=== Bot запущен! ===")
 
     app.run_polling(allowed_updates=Update.ALL_TYPES)
