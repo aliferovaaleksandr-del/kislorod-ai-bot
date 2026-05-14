@@ -440,7 +440,6 @@ async def fetch_kinopoisk_trailer() -> dict:
         async with httpx.AsyncClient(timeout=20.0) as client:
 
             # ── Шаг 1: берём список TOP-250 (или популярных) ──────────────
-            # type: TOP_250_BEST_FILMS | TOP_100_POPULAR_FILMS | TOP_AWAIT_FILMS
             top_type = random.choice(["TOP_250_BEST_FILMS", "TOP_100_POPULAR_FILMS"])
             page = random.randint(1, 5)  # страницы по 20 фильмов
 
@@ -462,20 +461,24 @@ async def fetch_kinopoisk_trailer() -> dict:
                 logger.warning("Кинопоиск: пустой список фильмов")
                 return {}
 
-            # ── Шаг 2: случайный фильм из выборки ─────────────────────────
-            film = random.choice(films[:15])
-            film_id = film.get("filmId")
+            # ── Шаг 2: перебираем до 5 фильмов пока не найдём трейлер ─────
+            random.shuffle(films)
+            candidates = films[:10]  # берём до 10 кандидатов
 
-            title    = film.get("nameRu") or film.get("nameEn") or "Без названия"
-            year_val = film.get("year", "")
-            poster_url = film.get("posterUrlPreview") or film.get("posterUrl") or ""
-            genres   = ", ".join(
-                g["genre"] for g in (film.get("genres") or [])[:3] if g.get("genre")
-            )
+            for film in candidates:
+                film_id = film.get("filmId")
+                if not film_id:
+                    continue
 
-            # ── Шаг 3: получаем описание фильма ───────────────────────────
-            description = ""
-            if film_id:
+                title    = film.get("nameRu") or film.get("nameEn") or "Без названия"
+                year_val = film.get("year", "")
+                poster_url = film.get("posterUrlPreview") or film.get("posterUrl") or ""
+                genres   = ", ".join(
+                    g["genre"] for g in (film.get("genres") or [])[:3] if g.get("genre")
+                )
+
+                # ── Шаг 3: получаем описание фильма ───────────────────────
+                description = ""
                 rd = await client.get(
                     f"{BASE}/api/v2.2/films/{film_id}",
                     headers=HEADERS,
@@ -487,14 +490,10 @@ async def fetch_kinopoisk_trailer() -> dict:
                         or detail.get("shortDescription")
                         or ""
                     )
-                    # Обновляем постер на полный если есть
-                    poster_url = (
-                        (detail.get("posterUrl") or poster_url)
-                    )
+                    poster_url = detail.get("posterUrl") or poster_url
 
-            # ── Шаг 4: ищем трейлер ───────────────────────────────────────
-            trailer_url = ""
-            if film_id:
+                # ── Шаг 4: ищем трейлер ───────────────────────────────────
+                trailer_url = ""
                 rv = await client.get(
                     f"{BASE}/api/v2.2/films/{film_id}/videos",
                     headers=HEADERS,
@@ -519,19 +518,22 @@ async def fetch_kinopoisk_trailer() -> dict:
                     if not trailer_url and videos:
                         trailer_url = videos[0].get("url", "")
 
-            if not trailer_url:
-                logger.warning(f"Для '{title}' нет трейлера, пропускаем")
-                return {}
+                if not trailer_url:
+                    logger.warning(f"Для '{title}' нет трейлера, пробую следующий фильм...")
+                    continue  # ← переходим к следующему фильму вместо return {}
 
-            logger.info(f"Кинопоиск: нашли «{title}» ({year_val}), трейлер: {trailer_url}")
-            return {
-                "title":       title,
-                "description": description,
-                "poster_url":  poster_url,
-                "trailer_url": trailer_url,
-                "year":        year_val,
-                "genres":      genres,
-            }
+                logger.info(f"Кинопоиск: нашли «{title}» ({year_val}), трейлер: {trailer_url}")
+                return {
+                    "title":       title,
+                    "description": description,
+                    "poster_url":  poster_url,
+                    "trailer_url": trailer_url,
+                    "year":        year_val,
+                    "genres":      genres,
+                }
+
+            logger.warning("Кинопоиск: ни один из кандидатов не имеет трейлера")
+            return {}
 
     except Exception as e:
         logger.error(f"Kinopoisk exception: {e}")
@@ -603,6 +605,7 @@ async def job_kislorod_trailer(context: ContextTypes.DEFAULT_TYPE):
     text, poster = await generate_trailer_post()
     if text:
         await send_post(context.bot, CHANNEL_KISLOROD, text, poster)
+        await send_post(context.bot, CHANNEL_ACTOR, text, poster)
     else:
         text2, img2 = await generate_kislorod_post()
         await send_post(context.bot, CHANNEL_KISLOROD, text2, img2)
@@ -761,10 +764,11 @@ async def trailer_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     text, poster = await generate_trailer_post()
     if text:
         await send_post(context.bot, CHANNEL_KISLOROD, text, poster)
-        await update.message.reply_text("✅ Трейлер опубликован в @realtimeproductionn!")
+        await send_post(context.bot, CHANNEL_ACTOR, text, poster)
+        await update.message.reply_text("✅ Трейлер опубликован в @realtimeproductionn и @actorsashapotapovv!")
     else:
         await update.message.reply_text(
-            "❌ Не удалось получить трейлер.\n"
+            "❌ Не удалось получить трейлер (все кандидаты без видео).\n"
             "Проверь KINOPOISK_API_KEY в переменных Railway."
         )
 
