@@ -1,5 +1,6 @@
 import os
 import logging
+import random
 import httpx
 from datetime import time as dtime
 from telegram import (
@@ -23,6 +24,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+KINOPOISK_API_KEY = os.getenv("KINOPOISK_API_KEY")  # токен с kinopoisk.dev
 
 CHANNEL_KISLOROD = "@realtimeproductionn"
 CHANNEL_ACTOR = "@actorsashapotapovv"
@@ -217,11 +219,15 @@ _kislorod_query_index = 0
 _actor_query_index = 0
 
 
-async def fetch_news(query: str, language: str = "ru", page_size: int = 5) -> str:
-    """Получает свежие новости через NewsAPI."""
+async def fetch_news(query: str, language: str = "ru", page_size: int = 5) -> tuple[str, str]:
+    """
+    Получает свежие новости через NewsAPI.
+    Возвращает кортеж: (текст_новостей, url_картинки_или_пустая_строка).
+    Картинка берётся из первой статьи у которой есть urlToImage.
+    """
     if not NEWS_API_KEY:
         logger.warning("NEWS_API_KEY не задан!")
-        return ""
+        return "", ""
 
     url = "https://newsapi.org/v2/everything"
     params = {
@@ -238,7 +244,7 @@ async def fetch_news(query: str, language: str = "ru", page_size: int = 5) -> st
 
         if response.status_code != 200:
             logger.error(f"NewsAPI вернул {response.status_code}: {response.text}")
-            return ""
+            return "", ""
 
         articles = response.json().get("articles", [])
 
@@ -250,11 +256,19 @@ async def fetch_news(query: str, language: str = "ru", page_size: int = 5) -> st
             articles = response.json().get("articles", [])
 
         news_text = ""
+        image_url = ""
+
         for i, a in enumerate(articles[:5], 1):
             title = a.get("title", "")
             desc = a.get("description", "")
             source = a.get("source", {}).get("name", "")
-            published = a.get("publishedAt", "")[:10]  # только дата
+            published = a.get("publishedAt", "")[:10]
+            img = a.get("urlToImage", "") or ""
+
+            # Берём картинку из первой подходящей статьи
+            if not image_url and img and img.startswith("http"):
+                image_url = img
+
             if title and title != "[Removed]":
                 news_text += f"{i}. [{published}] {title}"
                 if desc and desc != "[Removed]":
@@ -263,11 +277,11 @@ async def fetch_news(query: str, language: str = "ru", page_size: int = 5) -> st
                     news_text += f"\n   Источник: {source}"
                 news_text += "\n\n"
 
-        return news_text.strip()
+        return news_text.strip(), image_url
 
     except Exception as e:
         logger.error(f"NewsAPI exception: {e}")
-        return ""
+        return "", ""
 
 
 # ─────────────────────────────────────────────
@@ -323,25 +337,23 @@ async def ask_yandex_gpt(system_prompt: str, conversation: list) -> str:
 # ГЕНЕРАЦИЯ ПОСТОВ
 # ─────────────────────────────────────────────
 
-async def generate_kislorod_post() -> str:
-    """Генерирует пост для канала @realtimeproductionn."""
+async def generate_kislorod_post() -> tuple:
+    """Возвращает (текст, image_url) для @realtimeproductionn."""
     global _kislorod_query_index
-
-    # Ротация запросов для разнообразия
     query = KISLOROD_QUERIES[_kislorod_query_index % len(KISLOROD_QUERIES)]
     _kislorod_query_index += 1
 
-    logger.info(f"Ищу новости для Кислород по запросу: '{query}'")
-    news = await fetch_news(query, language="ru")
+    logger.info(f"Кислород: новости по запросу '{query}'")
+    news, image_url = await fetch_news(query, language="ru")
     if not news:
-        news = await fetch_news("cinema film production", language="en")
+        news, image_url = await fetch_news("cinema film production", language="en")
 
     if news:
         system = (
             "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН. "
             "Студия создаёт мультфильмы, клипы, сериалы и рекламу с помощью AI. "
             "Пиши интересно, живо, с уважением к читателю. "
-            "Отвечай ТОЛЬКО текстом поста — без пояснений, без markdown, без кавычек вокруг поста."
+            "Отвечай ТОЛЬКО текстом поста — без пояснений, без markdown, без кавычек."
         )
         user_msg = (
             f"Свежие новости из мира кино и продакшена:\n\n{news}\n\n"
@@ -350,7 +362,7 @@ async def generate_kislorod_post() -> str:
             "— 150–250 слов\n"
             "— Живой, увлекательный стиль\n"
             "— 1–2 тематических эмодзи в начале\n"
-            "— В конце хэштеги: #кино #кислородпродакшен #продакшен #актёрскоемастерство\n"
+            "— Хэштеги в конце: #кино #кислородпродакшен #продакшен #актёрскоемастерство\n"
             "— Только текст поста на русском языке, без заголовка"
         )
     else:
@@ -363,20 +375,20 @@ async def generate_kislorod_post() -> str:
             "150–250 слов, 1–2 эмодзи, хэштеги: #кино #кислородпродакшен #продакшен"
         )
 
-    return await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+    text = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+    return text, image_url
 
 
-async def generate_actor_post() -> str:
-    """Генерирует пост для личного канала @actorsashapotapovv."""
+async def generate_actor_post() -> tuple:
+    """Возвращает (текст, image_url) для @actorsashapotapovv."""
     global _actor_query_index
-
     query = ACTOR_QUERIES[_actor_query_index % len(ACTOR_QUERIES)]
     _actor_query_index += 1
 
-    logger.info(f"Ищу новости для актёрского канала по запросу: '{query}'")
-    news = await fetch_news(query, language="ru")
+    logger.info(f"Актёр: новости по запросу '{query}'")
+    news, image_url = await fetch_news(query, language="ru")
     if not news:
-        news = await fetch_news("actor film AI casting technology", language="en")
+        news, image_url = await fetch_news("actor film AI casting technology", language="en")
 
     if news:
         system = (
@@ -391,7 +403,7 @@ async def generate_actor_post() -> str:
             "Требования:\n"
             "— 120–200 слов\n"
             "— От первого лица, искренний личный тон\n"
-            "— Своё мнение о новостях или тема из профессиональной жизни\n"
+            "— Своё мнение или тема из профессиональной жизни\n"
             "— 1–2 эмодзи\n"
             "— Хэштеги в конце: #актёр #кино #александрпотапов #актёрскоемастерство\n"
             "— Только текст поста на русском языке"
@@ -402,62 +414,180 @@ async def generate_actor_post() -> str:
             "Отвечай ТОЛЬКО текстом поста."
         )
         user_msg = (
-            "Напиши личный пост от имени актёра Александра Потапова об актёрском пути и профессии. "
+            "Напиши личный пост от имени актёра Александра Потапова об актёрском пути. "
             "120–200 слов, от первого лица, 1–2 эмодзи. "
             "Хэштеги: #актёр #кино #александрпотапов #актёрскоемастерство"
         )
 
-    return await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+    text = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+    return text, image_url
 
 
-async def generate_and_post(bot, channel: str, post_type: str):
-    """Генерирует пост и отправляет в канал."""
-    logger.info(f"Генерирую пост типа '{post_type}' для {channel}...")
+async def fetch_kinopoisk_trailer() -> dict:
+    """
+    Получает случайный свежий фильм из Кинопоиска с трейлером.
+    Возвращает: {title, description, poster_url, trailer_url, year, genres}
+    или {} если ничего не нашёл.
+    """
+    if not KINOPOISK_API_KEY:
+        logger.warning("KINOPOISK_API_KEY не задан!")
+        return {}
+
+    headers = {"X-API-KEY": KINOPOISK_API_KEY, "accept": "application/json"}
+    base    = "https://api.kinopoisk.dev/v1.4"
+
     try:
-        if post_type == "kislorod":
-            text = await generate_kislorod_post()
-        else:
-            text = await generate_actor_post()
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            # Чередуем подборки для разнообразия
+            sort_options = [
+                ("votes.imdb", "2024-2025"),
+                ("rating.kp",  "2023-2025"),
+                ("votes.kp",   "2025"),
+            ]
+            sort_field, year = random.choice(sort_options)
 
-        if not text or text.startswith("Ошибка"):
-            logger.error(f"Пост не сгенерирован: {text}")
-            return
+            r = await client.get(
+                f"{base}/movie",
+                params={
+                    "type":          "movie",
+                    "year":          year,
+                    "sortField":     sort_field,
+                    "sortType":      "-1",
+                    "limit":         20,
+                    "notNullFields": "videos.trailers.url",
+                },
+                headers=headers,
+            )
 
-        await bot.send_message(chat_id=channel, text=text)
-        logger.info(f"✅ Пост отправлен в {channel}")
+            if r.status_code != 200:
+                logger.error(f"Kinopoisk {r.status_code}: {r.text[:300]}")
+                return {}
+
+            movies = r.json().get("docs", [])
+            if not movies:
+                logger.warning("Кинопоиск: пустой список фильмов")
+                return {}
+
+            movie = random.choice(movies[:10])
+
+            title       = movie.get("name") or movie.get("alternativeName") or "Без названия"
+            description = movie.get("description") or movie.get("shortDescription") or ""
+            year_val    = movie.get("year", "")
+            poster_url  = (movie.get("poster") or {}).get("url", "")
+            genres      = ", ".join(
+                g["name"] for g in (movie.get("genres") or [])[:3] if g.get("name")
+            )
+
+            # Ищем трейлер (предпочитаем YouTube)
+            trailer_url = ""
+            trailers = (movie.get("videos") or {}).get("trailers") or []
+            for t in trailers:
+                url = t.get("url", "")
+                if "youtube.com" in url or "youtu.be" in url:
+                    trailer_url = url
+                    break
+            if not trailer_url and trailers:
+                trailer_url = trailers[0].get("url", "")
+
+            if not trailer_url:
+                logger.warning(f"Для '{title}' нет трейлера")
+                return {}
+
+            return {
+                "title":       title,
+                "description": description,
+                "poster_url":  poster_url,
+                "trailer_url": trailer_url,
+                "year":        year_val,
+                "genres":      genres,
+            }
 
     except Exception as e:
-        logger.error(f"Не удалось отправить пост в {channel}: {e}")
+        logger.error(f"Kinopoisk exception: {e}")
+        return {}
+
+
+async def generate_trailer_post() -> tuple:
+    """Возвращает (текст, poster_url) для поста с трейлером."""
+    logger.info("Трейлер: запрашиваю фильм из Кинопоиска...")
+    movie = await fetch_kinopoisk_trailer()
+
+    if not movie:
+        return "", ""
+
+    system = (
+        "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН. "
+        "Пишешь анонс трейлера — интригующе, с любовью к кино. "
+        "Отвечай ТОЛЬКО текстом поста — без пояснений, без markdown."
+    )
+    user_msg = (
+        f"Фильм: «{movie['title']}» ({movie['year']})\n"
+        f"Жанры: {movie['genres']}\n"
+        f"Описание: {movie['description']}\n\n"
+        "Напиши анонс-пост для Telegram-канала.\n"
+        "Требования:\n"
+        "— 80–120 слов\n"
+        "— Интригующий стиль, заинтересуй читателя\n"
+        "— 1–2 эмодзи в начале\n"
+        f"— В конце отдельной строкой: ▶️ Смотреть трейлер: {movie['trailer_url']}\n"
+        "— Хэштеги: #трейлер #кино #кислородпродакшен\n"
+        "— Только текст поста на русском языке"
+    )
+
+    text = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+    return text, movie["poster_url"]
+
+
+async def send_post(bot, channel: str, text: str, image_url: str = ""):
+    """Отправляет пост. С фото если есть image_url, иначе текст."""
+    if not text or text.startswith("Ошибка"):
+        logger.error(f"Некорректный текст поста: {text[:80]}")
+        return
+    try:
+        if image_url:
+            try:
+                await bot.send_photo(chat_id=channel, photo=image_url, caption=text)
+                logger.info(f"✅ Фото+текст → {channel}")
+                return
+            except Exception as e:
+                logger.warning(f"Фото не отправилось ({e}), отправляю текст")
+        await bot.send_message(chat_id=channel, text=text)
+        logger.info(f"✅ Текст → {channel}")
+    except Exception as e:
+        logger.error(f"Ошибка отправки в {channel}: {e}")
 
 
 # ─────────────────────────────────────────────
-# JOB FUNCTIONS — расписание постов
+# JOB FUNCTIONS — расписание
 # ─────────────────────────────────────────────
-# Время UTC (Москва = UTC+3, поэтому вычитаем 3 часа)
-#
-# @realtimeproductionn — 3 поста в день:
-#   10:00 МСК → 07:00 UTC
-#   14:00 МСК → 11:00 UTC
-#   19:00 МСК → 16:00 UTC
-#
-# @actorsashapotapovv — 2 поста в день:
-#   11:00 МСК → 08:00 UTC
-#   20:00 МСК → 17:00 UTC
+# МСК = UTC+3
+# @realtimeproductionn: 10:00 (07 UTC) новости | 14:00 (11 UTC) трейлер | 19:00 (16 UTC) новости
+# @actorsashapotapovv:  11:00 (08 UTC) актёр   | 20:00 (17 UTC) актёр
 
-async def job_kislorod_1(context: ContextTypes.DEFAULT_TYPE):
-    await generate_and_post(context.bot, CHANNEL_KISLOROD, "kislorod")
+async def job_kislorod_morning(context: ContextTypes.DEFAULT_TYPE):
+    text, img = await generate_kislorod_post()
+    await send_post(context.bot, CHANNEL_KISLOROD, text, img)
 
-async def job_kislorod_2(context: ContextTypes.DEFAULT_TYPE):
-    await generate_and_post(context.bot, CHANNEL_KISLOROD, "kislorod")
+async def job_kislorod_trailer(context: ContextTypes.DEFAULT_TYPE):
+    text, poster = await generate_trailer_post()
+    if text:
+        await send_post(context.bot, CHANNEL_KISLOROD, text, poster)
+    else:
+        # Fallback — обычный пост если Кинопоиск недоступен
+        text2, img2 = await generate_kislorod_post()
+        await send_post(context.bot, CHANNEL_KISLOROD, text2, img2)
 
-async def job_kislorod_3(context: ContextTypes.DEFAULT_TYPE):
-    await generate_and_post(context.bot, CHANNEL_KISLOROD, "kislorod")
+async def job_kislorod_evening(context: ContextTypes.DEFAULT_TYPE):
+    text, img = await generate_kislorod_post()
+    await send_post(context.bot, CHANNEL_KISLOROD, text, img)
 
-async def job_actor_1(context: ContextTypes.DEFAULT_TYPE):
-    await generate_and_post(context.bot, CHANNEL_ACTOR, "actor")
+async def job_actor_morning(context: ContextTypes.DEFAULT_TYPE):
+    text, img = await generate_actor_post()
+    await send_post(context.bot, CHANNEL_ACTOR, text, img)
 
-async def job_actor_2(context: ContextTypes.DEFAULT_TYPE):
-    await generate_and_post(context.bot, CHANNEL_ACTOR, "actor")
+async def job_actor_evening(context: ContextTypes.DEFAULT_TYPE):
+    text, img = await generate_actor_post()
+    await send_post(context.bot, CHANNEL_ACTOR, text, img)
 
 
 # ─────────────────────────────────────────────
@@ -551,11 +681,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎬 КИСЛОРОД AI — Справка\n\n"
-        "/start — Начать и открыть меню\n"
-        "/clear — Очистить историю чата\n"
-        "/post_now — Опубликовать посты сейчас (тест)\n"
-        "/schedule — Расписание автопостинга\n"
-        "/help — Справка\n\n"
+        "/start        — Открыть меню\n"
+        "/clear        — Очистить историю чата\n"
+        "/post_now     — Опубликовать новостные посты (тест)\n"
+        "/trailer_now  — Опубликовать трейлер (тест)\n"
+        "/schedule     — Расписание автопостинга\n"
+        "/help         — Справка\n\n"
         "Контакты:\n"
         "📧 actorsashapotapov@gmail.com\n"
         "💬 @actorsashapotapov",
@@ -572,29 +703,40 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает расписание автопостинга."""
     await update.message.reply_text(
         "📅 Расписание автопостинга (МСК):\n\n"
         "📺 @realtimeproductionn — 3 поста в день:\n"
-        "   🕙 10:00 — новости кино и продакшена\n"
-        "   🕑 14:00 — тренды и индустрия\n"
-        "   🕖 19:00 — вечерний дайджест\n\n"
+        "   🕙 10:00 — новости кино и продакшена 📰\n"
+        "   🕑 14:00 — трейлер фильма (Кинопоиск) 🎬\n"
+        "   🕖 19:00 — вечерний дайджест 📰\n\n"
         "🎭 @actorsashapotapovv — 2 поста в день:\n"
         "   🕚 11:00 — утренний пост от Александра\n"
         "   🕗 20:00 — вечерний пост от Александра\n\n"
-        "Всего: 5 постов в день на основе свежих новостей NewsAPI 📰"
+        "Всего: 5 постов в день\n"
+        "Источники: NewsAPI 📰 + Кинопоиск 🎬"
     )
 
 
 async def post_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Тестовая публикация постов немедленно."""
-    await update.message.reply_text(
-        "⏳ Ищу свежие новости и генерирую посты...\n"
-        "Это займёт ~15–30 секунд."
-    )
-    await generate_and_post(context.bot, CHANNEL_KISLOROD, "kislorod")
-    await generate_and_post(context.bot, CHANNEL_ACTOR, "actor")
-    await update.message.reply_text("✅ Посты опубликованы в оба канала!")
+    await update.message.reply_text("⏳ Генерирую новостные посты (~20 сек)...")
+    text1, img1 = await generate_kislorod_post()
+    await send_post(context.bot, CHANNEL_KISLOROD, text1, img1)
+    text2, img2 = await generate_actor_post()
+    await send_post(context.bot, CHANNEL_ACTOR, text2, img2)
+    await update.message.reply_text("✅ Новостные посты опубликованы!")
+
+
+async def trailer_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⏳ Ищу свежий трейлер в Кинопоиске (~15 сек)...")
+    text, poster = await generate_trailer_post()
+    if text:
+        await send_post(context.bot, CHANNEL_KISLOROD, text, poster)
+        await update.message.reply_text("✅ Трейлер опубликован в @realtimeproductionn!")
+    else:
+        await update.message.reply_text(
+            "❌ Не удалось получить трейлер.\n"
+            "Проверь KINOPOISK_API_KEY в переменных Railway."
+        )
 
 
 # ─────────────────────────────────────────────
@@ -603,34 +745,30 @@ async def post_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     logger.info("=== KISLOROD AI Bot starting ===")
-    logger.info(f"BOT_TOKEN:       {'✅ задан' if BOT_TOKEN else '❌ НЕ ЗАДАН'}")
-    logger.info(f"YANDEX_API_KEY:  {'✅ задан' if YANDEX_API_KEY else '❌ НЕ ЗАДАН'}")
-    logger.info(f"YANDEX_FOLDER_ID: {YANDEX_FOLDER_ID or '❌ НЕ ЗАДАН'}")
-    logger.info(f"NEWS_API_KEY:    {'✅ задан' if NEWS_API_KEY else '❌ НЕ ЗАДАН'}")
+    logger.info(f"BOT_TOKEN:         {'✅' if BOT_TOKEN        else '❌ НЕ ЗАДАН'}")
+    logger.info(f"YANDEX_API_KEY:    {'✅' if YANDEX_API_KEY   else '❌ НЕ ЗАДАН'}")
+    logger.info(f"YANDEX_FOLDER_ID:  {YANDEX_FOLDER_ID         or  '❌ НЕ ЗАДАН'}")
+    logger.info(f"NEWS_API_KEY:      {'✅' if NEWS_API_KEY      else '❌ НЕ ЗАДАН'}")
+    logger.info(f"KINOPOISK_API_KEY: {'✅' if KINOPOISK_API_KEY else '❌ НЕ ЗАДАН'}")
 
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Команды
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("clear", clear_command))
-    app.add_handler(CommandHandler("schedule", schedule_command))
-    app.add_handler(CommandHandler("post_now", post_now_command))
-
-    # Колбэки и сообщения
+    app.add_handler(CommandHandler("start",       start))
+    app.add_handler(CommandHandler("help",        help_command))
+    app.add_handler(CommandHandler("clear",       clear_command))
+    app.add_handler(CommandHandler("schedule",    schedule_command))
+    app.add_handler(CommandHandler("post_now",    post_now_command))
+    app.add_handler(CommandHandler("trailer_now", trailer_now_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_webapp_data))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # ─── Расписание автопостинга (UTC) ───
-    # @realtimeproductionn: 10:00, 14:00, 19:00 МСК → 07:00, 11:00, 16:00 UTC
-    app.job_queue.run_daily(job_kislorod_1, time=dtime(7, 0))
-    app.job_queue.run_daily(job_kislorod_2, time=dtime(11, 0))
-    app.job_queue.run_daily(job_kislorod_3, time=dtime(16, 0))
-
-    # @actorsashapotapovv: 11:00, 20:00 МСК → 08:00, 17:00 UTC
-    app.job_queue.run_daily(job_actor_1, time=dtime(8, 0))
-    app.job_queue.run_daily(job_actor_2, time=dtime(17, 0))
+    # Расписание (UTC = МСК − 3)
+    app.job_queue.run_daily(job_kislorod_morning, time=dtime(7,  0))  # 10:00 МСК
+    app.job_queue.run_daily(job_kislorod_trailer, time=dtime(11, 0))  # 14:00 МСК
+    app.job_queue.run_daily(job_kislorod_evening, time=dtime(16, 0))  # 19:00 МСК
+    app.job_queue.run_daily(job_actor_morning,    time=dtime(8,  0))  # 11:00 МСК
+    app.job_queue.run_daily(job_actor_evening,    time=dtime(17, 0))  # 20:00 МСК
 
     logger.info("=== Расписание: Кислород 07/11/16 UTC | Актёр 08/17 UTC ===")
     logger.info("=== Bot запущен! ===")
