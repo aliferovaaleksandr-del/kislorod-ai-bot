@@ -1144,6 +1144,31 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    if action == "cancel_awaiting":
+        context.user_data.pop("awaiting", None)
+        await query.edit_message_text("❌ Отменено.")
+        return
+
+    if action == "new_storyboard":
+        context.user_data["awaiting"] = "storyboard"
+        await query.edit_message_text(
+            "🎬 Опиши новую сцену для раскадровки:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
+            ]]),
+        )
+        return
+
+    if action == "new_character":
+        context.user_data["awaiting"] = "character"
+        await query.edit_message_text(
+            "🎭 Опиши нового персонажа:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
+            ]]),
+        )
+        return
+
     if action == "clear_chat":
         context.user_data["history"] = []
         role_key = context.user_data.get("role")
@@ -1228,6 +1253,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_text:
         return
 
+    # Перехват состояния ожидания ввода для /storyboard и /character
+    awaiting = context.user_data.get("awaiting")
+    if awaiting == "storyboard":
+        context.user_data.pop("awaiting", None)
+        await _generate_storyboard(update, context, user_text)
+        return
+    if awaiting == "character":
+        context.user_data.pop("awaiting", None)
+        await _generate_character(update, context, user_text)
+        return
+
     role_key = context.user_data.get("role")
 
     # Автороль: если роль не выбрана — назначаем "general" и сообщаем об этом
@@ -1268,6 +1304,166 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response, reply_markup=hints_keyboard(role_key))
 
 
+# ─────────────────────────────────────────────
+# РАСКАДРОВКА — /storyboard
+# ─────────────────────────────────────────────
+
+async def storyboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Первый вызов — спрашивает описание сцены.
+    Второй вызов (с аргументом) — генерирует раскадровку.
+    Или: /storyboard <описание сцены>
+    """
+    args = context.args
+    if args:
+        # Описание передано сразу: /storyboard герой входит в тёмный дом
+        scene_description = " ".join(args)
+        await _generate_storyboard(update, context, scene_description)
+    else:
+        # Запрашиваем описание
+        context.user_data["awaiting"] = "storyboard"
+        await update.message.reply_text(
+            "🎬 Раскадровка сцены\n\n"
+            "Опиши сцену — жанр, локацию, персонажей, действие и настроение.\n\n"
+            "Например:\n"
+            "_Ночная улица, дождь. Детектив выходит из машины и видит тело. "
+            "Атмосфера нуар, тревожное напряжение._",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
+            ]]),
+        )
+
+
+async def _generate_storyboard(update: Update, context: ContextTypes.DEFAULT_TYPE, scene: str):
+    chat_id = update.effective_chat.id
+    await context.bot.send_message(chat_id=chat_id, text="⏳ Генерирую раскадровку (~15 сек)...")
+
+    system = (
+        "Ты — опытный режиссёр и раскадровщик. "
+        "Создаёшь детальные текстовые раскадровки в профессиональном формате. "
+        "Отвечай ТОЛЬКО раскадровкой — без предисловий и пояснений."
+    )
+    user_msg = (
+        f"Создай текстовую раскадровку для сцены:\n\n{scene}\n\n"
+        "Формат каждого кадра:\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "КАДР [номер]\n"
+        "Ракурс: [тип съёмки — крупный/средний/общий/детальный план, угол]\n"
+        "Локация: [место, время суток, погода]\n"
+        "Действие: [что происходит в кадре]\n"
+        "Свет: [характер освещения, источники]\n"
+        "Звук: [музыка, звуки, тишина]\n"
+        "Реплика: [диалог или —]\n"
+        "Длительность: [секунды]\n\n"
+        "Сделай 5–8 кадров. После всех кадров добавь:\n"
+        "РЕЖИССЁРСКАЯ ЗАМЕТКА: [1–2 предложения об общей атмосфере и ключевом визуальном решении]"
+    )
+
+    stop_typing = asyncio.Event()
+    typing_task = asyncio.create_task(keep_typing(context.bot, chat_id, stop_typing))
+
+    try:
+        response = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+    finally:
+        stop_typing.set()
+        typing_task.cancel()
+        try:
+            await typing_task
+        except asyncio.CancelledError:
+            pass
+
+    if not response or response.startswith("⚠️"):
+        response = "Не удалось сгенерировать раскадровку. Попробуй снова."
+
+    role_key = context.user_data.get("role", "general")
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"🎬 Раскадровка сцены\n\n{response}",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔄 Новая раскадровка", callback_data="new_storyboard"),
+            InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
+        ]]),
+    )
+
+
+# ─────────────────────────────────────────────
+# КАРТОЧКА ПЕРСОНАЖА — /character
+# ─────────────────────────────────────────────
+
+async def character_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /character — спрашивает имя/описание персонажа и генерирует полную карточку.
+    /character <описание> — генерирует сразу.
+    """
+    args = context.args
+    if args:
+        char_description = " ".join(args)
+        await _generate_character(update, context, char_description)
+    else:
+        context.user_data["awaiting"] = "character"
+        await update.message.reply_text(
+            "🎭 Карточка персонажа\n\n"
+            "Опиши персонажа — имя, возраст, жанр, роль в истории и любые детали.\n\n"
+            "Например:\n"
+            "_Максим, 35 лет, бывший полицейский. Главный герой криминального триллера. "
+            "Циничный, но справедливый. Потерял семью._",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
+            ]]),
+        )
+
+
+async def _generate_character(update: Update, context: ContextTypes.DEFAULT_TYPE, description: str):
+    chat_id = update.effective_chat.id
+    await context.bot.send_message(chat_id=chat_id, text="⏳ Создаю карточку персонажа (~15 сек)...")
+
+    system = (
+        "Ты — опытный сценарист и актёрский педагог. "
+        "Создаёшь детальные карточки персонажей для актёров и сценаристов. "
+        "Отвечай ТОЛЬКО карточкой персонажа — без предисловий."
+    )
+    user_msg = (
+        f"Создай полную карточку персонажа на основе описания:\n\n{description}\n\n"
+        "Формат карточки:\n\n"
+        "👤 ИМЯ И ВОЗРАСТ\n[имя, возраст, профессия]\n\n"
+        "🧬 ФИЗИЧЕСКИЙ ПОРТРЕТ\n[внешность, телосложение, особые черты, стиль одежды]\n\n"
+        "🧠 ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ\n[характер, сильные и слабые стороны, страхи, желания]\n\n"
+        "📖 ИСТОРИЯ И ПРЕДЫСТОРИЯ\n[откуда пришёл, ключевые события жизни, травмы]\n\n"
+        "🎯 МОТИВАЦИЯ\n[чего хочет в истории, от чего убегает, внутренний конфликт]\n\n"
+        "🗣 РЕЧЬ И ПОВЕДЕНИЕ\n[как говорит, любимые фразы, жесты, привычки]\n\n"
+        "🎭 СОВЕТЫ АКТЁРУ\n[как войти в образ, физические якоря, эмоциональный ключ]\n\n"
+        "📊 АРК РАЗВИТИЯ\n[где персонаж в начале → что меняется → где в конце]"
+    )
+
+    stop_typing = asyncio.Event()
+    typing_task = asyncio.create_task(keep_typing(context.bot, chat_id, stop_typing))
+
+    try:
+        response = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+    finally:
+        stop_typing.set()
+        typing_task.cancel()
+        try:
+            await typing_task
+        except asyncio.CancelledError:
+            pass
+
+    if not response or response.startswith("⚠️"):
+        response = "Не удалось создать карточку. Попробуй снова."
+
+    role_key = context.user_data.get("role", "general")
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"🎭 Карточка персонажа\n\n{response}",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔄 Новый персонаж", callback_data="new_character"),
+            InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
+        ]]),
+    )
+
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     is_admin = user_id in ADMIN_IDS
@@ -1276,6 +1472,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎬 КИСЛОРОД AI — Справка\n\n"
         "/start          — Открыть меню\n"
         "/clear          — Очистить историю чата\n"
+        "/storyboard     — Раскадровка сцены 🎬\n"
+        "/character      — Карточка персонажа 🎭\n"
         "/help           — Справка\n"
     )
 
@@ -1432,6 +1630,8 @@ def main():
     app.add_handler(CommandHandler("start",        start))
     app.add_handler(CommandHandler("help",         help_command))
     app.add_handler(CommandHandler("clear",        clear_command))
+    app.add_handler(CommandHandler("storyboard",   storyboard_command))
+    app.add_handler(CommandHandler("character",    character_command))
 
     # Команды только для админа
     app.add_handler(CommandHandler("schedule",     schedule_command))
