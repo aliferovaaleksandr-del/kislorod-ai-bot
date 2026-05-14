@@ -413,6 +413,185 @@ async def generate_actor_post() -> tuple:
 
 
 # ─────────────────────────────────────────────
+# ФИЛЬМОГРАФИЯ АЛЕКСАНДРА ПОТАПОВА
+# ─────────────────────────────────────────────
+
+FILMOGRAPHY = [
+    {
+        "title": "Эльбрус",
+        "year": "2026",
+        "role": "Гога",
+        "type": "сериал",
+        "note": "последняя работа, 2-й сезон",
+    },
+    {
+        "title": "Пять копеек",
+        "year": "2024",
+        "role": "сержант",
+        "type": "сериал",
+        "note": "комедийный сериал",
+    },
+    {
+        "title": "Наш спецназ",
+        "year": "2022",
+        "role": "Сократ",
+        "type": "сериал",
+        "note": "рейтинг 8.0",
+    },
+    {
+        "title": "Друг на час",
+        "year": "2022",
+        "role": "клиент Рокета",
+        "type": "сериал",
+        "note": "ТНТ, рейтинг 7.1",
+    },
+    {
+        "title": "Казнь",
+        "year": "2021",
+        "role": "криминалист",
+        "type": "сериал",
+        "note": "детектив, рейтинг 7.4",
+    },
+    {
+        "title": "Хорошие вещи",
+        "year": "2021",
+        "role": "",
+        "type": "фильм",
+        "note": "фестивальное кино",
+    },
+    {
+        "title": "Мятеж",
+        "year": "2020",
+        "role": "мародёр",
+        "type": "сериал",
+        "note": "драма, рейтинг 8.4",
+    },
+    {
+        "title": "Ваш Ваня",
+        "year": "2020",
+        "role": "",
+        "type": "сериал",
+        "note": "рейтинг 7.1",
+    },
+    {
+        "title": "Фемида видит",
+        "year": "2019",
+        "role": "оперативник",
+        "type": "сериал",
+        "note": "рейтинг 6.7",
+    },
+    {
+        "title": "Короче",
+        "year": "2019–2021",
+        "role": "",
+        "type": "сериал",
+        "note": "комедия, рейтинг 7.6",
+    },
+    {
+        "title": "Полярный",
+        "year": "2019",
+        "role": "бармен",
+        "type": "сериал",
+        "note": "рейтинг 8.2, продолжается",
+    },
+    {
+        "title": "Трудные подростки",
+        "year": "2019–2024",
+        "role": "Гарик",
+        "type": "сериал",
+        "note": "рейтинг 8.2",
+    },
+    {
+        "title": "Ключи",
+        "year": "2018",
+        "role": "",
+        "type": "фильм",
+        "note": "",
+    },
+    {
+        "title": "Полицейский с Рублёвки. Мы тебя найдём",
+        "year": "2018",
+        "role": "Степа",
+        "type": "сериал",
+        "note": "ТНТ, рейтинг 7.5",
+    },
+    {
+        "title": "Оптимисты",
+        "year": "2017",
+        "role": "хулиган",
+        "type": "сериал",
+        "note": "Россия-1, рейтинг 7.9",
+    },
+    {
+        "title": "Четвертая смена",
+        "year": "2017",
+        "role": "сотрудник аварийной службы",
+        "type": "сериал",
+        "note": "НТВ, рейтинг 7.4",
+    },
+    {
+        "title": "Полицейский с Рублёвки в Бескудниково",
+        "year": "2017",
+        "role": "гопник",
+        "type": "сериал",
+        "note": "рейтинг 7.9",
+    },
+    {
+        "title": "Охота на дьявола",
+        "year": "2017",
+        "role": "",
+        "type": "сериал",
+        "note": "рейтинг 7.8",
+    },
+]
+
+_filmography_index = 0
+
+
+async def generate_filmography_post() -> tuple:
+    """
+    Пост от первого лица Александра Потапова о конкретном проекте
+    из его фильмографии. Каждый раз — новый проект по кругу.
+    Возвращает (текст, "").
+    """
+    global _filmography_index
+    project = FILMOGRAPHY[_filmography_index % len(FILMOGRAPHY)]
+    _filmography_index += 1
+
+    role_str = f", роль: {project['role']}" if project["role"] else ""
+    note_str = f" ({project['note']})" if project["note"] else ""
+
+    logger.info(f"Фильмография: пост о «{project['title']}» ({project['year']})")
+
+    system = (
+        "Ты помогаешь актёру Александру Потапову (19 декабря 1986 г.р.) вести его личный Telegram-канал. "
+        "Александр — российский киноактёр, сыгравший в 18 проектах, и основатель студии КИСЛОРОД ПРОДАКШЕН. "
+        "Пиши от его имени: искренне, по-человечески, с личным взглядом изнутри профессии. "
+        "Отвечай ТОЛЬКО текстом поста — без пояснений, без markdown."
+    )
+    user_msg = (
+        f"Напиши личный пост от имени Александра Потапова о его работе в проекте:\n\n"
+        f"Название: «{project['title']}»\n"
+        f"Год: {project['year']}\n"
+        f"Тип: {project['type']}{note_str}\n"
+        f"Роль{role_str}\n\n"
+        "Требования:\n"
+        "— 120–180 слов\n"
+        "— От первого лица, живо и искренне\n"
+        "— Расскажи что-то личное об этом проекте: что запомнилось, чему научил, "
+        "какие эмоции были на съёмках, что было сложно или интересно\n"
+        "— Если роль указана — упомяни её\n"
+        "— 1–2 эмодзи\n"
+        "— Хэштеги в конце: #актёр #александрпотапов #кино "
+        f"#{project['title'].replace(' ', '').replace('–', '').replace('.', '').lower()}\n"
+        "— Только текст поста на русском языке"
+    )
+
+    text = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+    return text, ""
+
+
+# ─────────────────────────────────────────────
 # КИНОПОИСК — вспомогательные функции
 # ─────────────────────────────────────────────
 
@@ -1129,6 +1308,15 @@ async def job_actor_evening(context: ContextTypes.DEFAULT_TYPE):
     text, img = await generate_actor_post()
     await send_post(context.bot, CHANNEL_ACTOR, text, img)
 
+async def job_actor_filmography(context: ContextTypes.DEFAULT_TYPE):
+    """13:00 МСК — пост о проекте из фильмографии в @actorsashapotapovv"""
+    text, img = await generate_filmography_post()
+    if text:
+        await send_post(context.bot, CHANNEL_ACTOR, text, img)
+    else:
+        text2, img2 = await generate_actor_post()
+        await send_post(context.bot, CHANNEL_ACTOR, text2, img2)
+
 
 # ─────────────────────────────────────────────
 # ОБРАБОТЧИКИ TELEGRAM
@@ -1233,6 +1421,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/series_now     — Рекомендация сериала\n"
         "/cartoon_now    — Пост о мультфильме\n"
         "/poster_now     — Красивый постер\n\n"
+        "🎭 Личные посты Александра:\n"
+        "/myfilm_now     — Пост о проекте из фильмографии\n\n"
         "Контакты:\n"
         "📧 actorsashapotapov@gmail.com\n"
         "💬 @actorsashapotapov",
@@ -1258,12 +1448,13 @@ async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "   🕓 16:00 — мультфильм 🎨\n"
         "   🕖 19:00 — вечерний дайджест 📰\n"
         "   🕘 21:00 — красивый постер 🖼\n\n"
-        "🎭 @actorsashapotapovv — 3 поста в день:\n"
+        "🎭 @actorsashapotapovv — 4 поста в день:\n"
         "   🕚 11:00 — утренний пост от Александра\n"
+        "   🕐 13:00 — пост о проекте из фильмографии 🎬\n"
         "   🕒 15:00 — рекомендация сериала 📺\n"
         "   🕗 20:00 — вечерний пост от Александра\n\n"
-        "Всего: 9 постов в день\n"
-        "Источники: NewsAPI 📰 + Кинопоиск 🎬"
+        "Всего: 10 постов в день\n"
+        "Источники: NewsAPI 📰 + Кинопоиск 🎬 + фильмография Александра 🎭"
     )
 
 
@@ -1342,6 +1533,16 @@ async def poster_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
 
+async def myfilm_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⏳ Пишу пост о твоём проекте (~15 сек)...")
+    text, img = await generate_filmography_post()
+    if text:
+        await send_post(context.bot, CHANNEL_ACTOR, text, img)
+        await update.message.reply_text("✅ Пост о проекте опубликован в @actorsashapotapovv!")
+    else:
+        await update.message.reply_text("❌ Не удалось сгенерировать пост. Попробуй снова.")
+
+
 # ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
@@ -1369,6 +1570,7 @@ def main():
     app.add_handler(CommandHandler("series_now",   series_now_command))
     app.add_handler(CommandHandler("cartoon_now",  cartoon_now_command))
     app.add_handler(CommandHandler("poster_now",   poster_now_command))
+    app.add_handler(CommandHandler("myfilm_now",   myfilm_now_command))
 
     # Callback и сообщения
     app.add_handler(CallbackQueryHandler(handle_callback))
@@ -1378,14 +1580,15 @@ def main():
     # ── Расписание (UTC = МСК − 3) ──────────────────────────────────
     # @realtimeproductionn
     app.job_queue.run_daily(job_kislorod_morning,   time=dtime(7,  0))  # 10:00 МСК
-    app.job_queue.run_daily(job_kislorod_new_film,  time=dtime(9,  0))  # 12:00 МСК ← NEW
+    app.job_queue.run_daily(job_kislorod_new_film,  time=dtime(9,  0))  # 12:00 МСК
     app.job_queue.run_daily(job_kislorod_trailer,   time=dtime(11, 0))  # 14:00 МСК
-    app.job_queue.run_daily(job_kislorod_cartoon,   time=dtime(13, 0))  # 16:00 МСК ← NEW
+    app.job_queue.run_daily(job_kislorod_cartoon,   time=dtime(13, 0))  # 16:00 МСК
     app.job_queue.run_daily(job_kislorod_evening,   time=dtime(16, 0))  # 19:00 МСК
-    app.job_queue.run_daily(job_kislorod_poster,    time=dtime(18, 0))  # 21:00 МСК ← NEW
+    app.job_queue.run_daily(job_kislorod_poster,    time=dtime(18, 0))  # 21:00 МСК
     # @actorsashapotapovv
     app.job_queue.run_daily(job_actor_morning,      time=dtime(8,  0))  # 11:00 МСК
-    app.job_queue.run_daily(job_actor_series,       time=dtime(12, 0))  # 15:00 МСК ← NEW
+    app.job_queue.run_daily(job_actor_filmography,  time=dtime(10, 0))  # 13:00 МСК ← NEW
+    app.job_queue.run_daily(job_actor_series,       time=dtime(12, 0))  # 15:00 МСК
     app.job_queue.run_daily(job_actor_evening,      time=dtime(17, 0))  # 20:00 МСК
 
     logger.info("=== Расписание ===")
