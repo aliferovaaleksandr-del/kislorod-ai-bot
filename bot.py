@@ -87,6 +87,93 @@ def chat_keyboard():
     ]])
 
 
+# Подсказки-кнопки для каждой роли
+ROLE_HINTS = {
+    "actor": [
+        ("🎭 Подготовь меня к роли", "hint_actor_1"),
+        ("🪞 Помоги примерить образ", "hint_actor_2"),
+        ("🎬 Разбери мою видео-пробу", "hint_actor_3"),
+        ("📄 Разбери текст сцены", "hint_actor_4"),
+    ],
+    "director": [
+        ("🎨 Придумай визуальный стиль", "hint_director_1"),
+        ("🎞 Помоги со раскадровкой", "hint_director_2"),
+        ("🌈 Подбери цветовую палитру", "hint_director_3"),
+        ("💡 Идеи для открывающей сцены", "hint_director_4"),
+    ],
+    "screenwriter": [
+        ("📖 Придумай структуру истории", "hint_screen_1"),
+        ("💬 Напиши живой диалог", "hint_screen_2"),
+        ("🧠 Разработай характер героя", "hint_screen_3"),
+        ("🔀 Придумай неожиданный поворот", "hint_screen_4"),
+    ],
+    "producer": [
+        ("📊 Помоги составить бюджет", "hint_prod_1"),
+        ("🎤 Напиши питч для инвестора", "hint_prod_2"),
+        ("📅 Составь производственный план", "hint_prod_3"),
+        ("📋 Сделай тритмент проекта", "hint_prod_4"),
+    ],
+    "client": [
+        ("📝 Помоги написать ТЗ", "hint_client_1"),
+        ("💡 Разработай креативную концепцию", "hint_client_2"),
+        ("📣 Придумай коммуникационную стратегию", "hint_client_3"),
+        ("🖼 Опиши идею для ролика", "hint_client_4"),
+    ],
+    "general": [
+        ("🎬 Что умеет студия КИСЛОРОД?", "hint_gen_1"),
+        ("📞 Как связаться со студией?", "hint_gen_2"),
+        ("💼 Хочу заказать проект", "hint_gen_3"),
+        ("🤖 Как AI помогает в кино?", "hint_gen_4"),
+    ],
+}
+
+# Тексты подсказок — что отправить в GPT при нажатии кнопки
+HINT_TEXTS = {
+    "hint_actor_1": "Помоги мне подготовиться к новой роли. Спроси меня о персонаже и дай план подготовки.",
+    "hint_actor_2": "Помоги примерить образ персонажа: опиши внешность, костюм, грим и манеру поведения.",
+    "hint_actor_3": "Я хочу разобрать свою видео-пробу. Спроси меня что я делал в пробе и дай разбор.",
+    "hint_actor_4": "Помоги разобрать текст сцены: мотивация персонажа, подтекст, как это сыграть.",
+    "hint_director_1": "Помоги разработать визуальный стиль для моего проекта. Спроси о жанре и атмосфере.",
+    "hint_director_2": "Помоги составить раскадровку для ключевой сцены. Спроси меня о сцене.",
+    "hint_director_3": "Подбери цветовую палитру и операторские решения для моего проекта.",
+    "hint_director_4": "Придумай варианты открывающей сцены для моего проекта. Спроси о жанре.",
+    "hint_screen_1": "Помоги выстроить трёхактную структуру для моей истории. Спроси об идее.",
+    "hint_screen_2": "Напиши живой диалог между двумя персонажами. Спроси меня о ситуации.",
+    "hint_screen_3": "Помоги разработать детальный характер главного героя с арком развития.",
+    "hint_screen_4": "Придумай неожиданный сюжетный поворот для моей истории. Спроси об идее.",
+    "hint_prod_1": "Помоги составить примерный бюджет для короткометражного фильма.",
+    "hint_prod_2": "Напиши убедительный питч для инвестора. Спроси о проекте.",
+    "hint_prod_3": "Помоги составить производственный план и тайминг для съёмочного проекта.",
+    "hint_prod_4": "Напиши тритмент проекта в профессиональном формате. Спроси об идее.",
+    "hint_client_1": "Помоги написать техническое задание для видеопроекта. Спроси о задаче.",
+    "hint_client_2": "Разработай креативную концепцию для моего проекта. Спроси о бренде и задаче.",
+    "hint_client_3": "Придумай коммуникационную стратегию для продвижения проекта.",
+    "hint_client_4": "Помоги описать идею для рекламного или имиджевого ролика.",
+    "hint_gen_1": "Расскажи подробно что умеет студия КИСЛОРОД ПРОДАКШЕН и какие проекты делает.",
+    "hint_gen_2": "Как связаться со студией КИСЛОРОД ПРОДАКШЕН чтобы обсудить проект?",
+    "hint_gen_3": "Я хочу заказать проект в студии КИСЛОРОД ПРОДАКШЕН. С чего начать?",
+    "hint_gen_4": "Как искусственный интеллект используется в современном кинопроизводстве?",
+}
+
+
+def hints_keyboard(role_key: str) -> InlineKeyboardMarkup:
+    """Возвращает клавиатуру с подсказками для конкретной роли + кнопки управления."""
+    hints = ROLE_HINTS.get(role_key, [])
+    rows = []
+    # По 2 подсказки в ряд
+    for i in range(0, len(hints), 2):
+        row = [InlineKeyboardButton(hints[i][0], callback_data=hints[i][1])]
+        if i + 1 < len(hints):
+            row.append(InlineKeyboardButton(hints[i + 1][0], callback_data=hints[i + 1][1]))
+        rows.append(row)
+    # Кнопки управления внизу
+    rows.append([
+        InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
+        InlineKeyboardButton("🗑 Очистить чат", callback_data="clear_chat"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
 def webapp_keyboard():
     return ReplyKeyboardMarkup(
         [[KeyboardButton("📋 Меню", web_app=WebAppInfo(url=WEBAPP_URL))]],
@@ -1063,7 +1150,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if role_key and role_key in ROLE_PROMPTS:
             await query.edit_message_text(
                 ROLE_PROMPTS[role_key]["welcome"] + "\n\n✅ История очищена",
-                reply_markup=chat_keyboard(),
+                reply_markup=hints_keyboard(role_key),
             )
         else:
             await query.answer("История очищена ✅", show_alert=True)
@@ -1077,7 +1164,48 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["history"] = []
         await query.edit_message_text(
             ROLE_PROMPTS[role_key]["welcome"],
-            reply_markup=chat_keyboard(),
+            reply_markup=hints_keyboard(role_key),
+        )
+        return
+
+    # Обработка нажатия на подсказку
+    if action in HINT_TEXTS:
+        role_key = context.user_data.get("role", "general")
+        hint_text = HINT_TEXTS[action]
+        chat_id = query.message.chat_id
+
+        await query.answer()
+        # Показываем пользователю какую подсказку он выбрал
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"_{hint_text}_",
+            parse_mode="Markdown",
+        )
+
+        history = context.user_data.get("history", [])
+        stop_typing = asyncio.Event()
+        typing_task = asyncio.create_task(keep_typing(context.bot, chat_id, stop_typing))
+
+        try:
+            history.append({"role": "user", "text": hint_text})
+            response = await ask_yandex_gpt(ROLE_PROMPTS[role_key]["system"], history)
+        finally:
+            stop_typing.set()
+            typing_task.cancel()
+            try:
+                await typing_task
+            except asyncio.CancelledError:
+                pass
+
+        if not response or not response.strip():
+            response = "Не смог сформулировать ответ. Попробуй переформулировать вопрос."
+
+        history.append({"role": "assistant", "text": response})
+        context.user_data["history"] = history[-30:]
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=response,
+            reply_markup=hints_keyboard(role_key),
         )
         return
 
@@ -1091,7 +1219,7 @@ async def handle_webapp_data(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["history"] = []
     await update.message.reply_text(
         ROLE_PROMPTS[role_key]["welcome"],
-        reply_markup=chat_keyboard(),
+        reply_markup=hints_keyboard(role_key),
     )
 
 
@@ -1101,12 +1229,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     role_key = context.user_data.get("role")
+
+    # Автороль: если роль не выбрана — назначаем "general" и сообщаем об этом
     if not role_key:
+        role_key = "general"
+        context.user_data["role"] = role_key
+        context.user_data["history"] = []
         await update.message.reply_text(
-            "Нажми кнопку 📋 Меню внизу, чтобы выбрать роль.",
+            "🌐 Роль не выбрана — отвечаю как общий ассистент студии.\n"
+            "Ты можешь выбрать конкретную роль через 📋 Меню.",
             reply_markup=webapp_keyboard(),
         )
-        return
 
     history = context.user_data.get("history", [])
     chat_id = update.effective_chat.id
@@ -1119,7 +1252,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         history.append({"role": "user", "text": user_text})
         response = await ask_yandex_gpt(ROLE_PROMPTS[role_key]["system"], history)
     finally:
-        # Останавливаем typing в любом случае
         stop_typing.set()
         typing_task.cancel()
         try:
@@ -1133,7 +1265,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     history.append({"role": "assistant", "text": response})
     context.user_data["history"] = history[-30:]
-    await update.message.reply_text(response, reply_markup=chat_keyboard())
+    await update.message.reply_text(response, reply_markup=hints_keyboard(role_key))
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
