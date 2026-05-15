@@ -933,9 +933,9 @@ async def generate_hf_image(prompt: str) -> bytes | None:
 
     # Список моделей — пробуем по очереди если одна недоступна
     models = [
-        "stabilityai/stable-diffusion-3.5-large",
-        "stabilityai/stable-diffusion-3.5-medium",
         "black-forest-labs/FLUX.1-dev",
+        "black-forest-labs/FLUX.1-schnell",
+        "stabilityai/stable-diffusion-3.5-large",
     ]
 
     headers = {
@@ -945,8 +945,8 @@ async def generate_hf_image(prompt: str) -> bytes | None:
     payload = {
         "inputs": prompt,
         "parameters": {
-            "guidance_scale": 4.5,
-            "num_inference_steps": 40,
+            "guidance_scale": 3.5,
+            "num_inference_steps": 35,
             "width": 768,
             "height": 1024,
         },
