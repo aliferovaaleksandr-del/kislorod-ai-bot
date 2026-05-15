@@ -32,6 +32,7 @@ RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "29f8af604fmsh7f2433154c9fb3dp1c9f6ajsn
 TMDB_API_KEY = os.getenv("TMDB_API_KEY")
 REPLICATE_API_KEY = os.getenv("REPLICATE_API_KEY")
 HF_TOKEN = os.getenv("HF_TOKEN")
+IMAGE_STYLE = os.getenv("IMAGE_STYLE", "pixar")  # pixar | comic | anime | cinematic | watercolor
 
 CHANNEL_KISLOROD = "@realtimeproductionn"
 CHANNEL_ACTOR = "@actorsashapotapovv"
@@ -942,14 +943,8 @@ async def generate_hf_image(prompt: str) -> bytes | None:
         "Authorization": f"Bearer {HF_TOKEN}",
         "Content-Type": "application/json",
     }
-    # ── Стили генерации ──────────────────────────────────────────
-    # Меняй IMAGE_STYLE чтобы переключить стиль постеров:
-    #   "cinematic"  — реалистичное кино (по умолчанию)
-    #   "pixar"      — Pixar / Disney 3D мультяшный
-    #   "comic"      — стиль комикса / Marvel
-    #   "anime"      — аниме / Studio Ghibli
-    #   "watercolor" — акварель / рисованный арт
-    IMAGE_STYLE = os.getenv("IMAGE_STYLE", "pixar")
+    # ── Стили генерации (переключается через IMAGE_STYLE в Railway) ──
+    # pixar | comic | anime | cinematic | watercolor
 
     STYLE_PRESETS = {
         "cinematic": {
@@ -1027,6 +1022,7 @@ async def generate_hf_image(prompt: str) -> bytes | None:
         },
     }
 
+    logger.info(f"HuggingFace: используется стиль '{IMAGE_STYLE}'")
     style = STYLE_PRESETS.get(IMAGE_STYLE, STYLE_PRESETS["pixar"])
     enhanced_prompt = prompt + style["suffix"]
 
@@ -3419,6 +3415,7 @@ def main():
     logger.info(f"TMDB_API_KEY:      {'✅' if TMDB_API_KEY       else '❌ НЕ ЗАДАН'}")
     logger.info(f"REPLICATE_API_KEY: {'✅' if REPLICATE_API_KEY  else '❌ НЕ ЗАДАН (будет YandexART)'}") 
     logger.info(f"HF_TOKEN:          {'✅' if HF_TOKEN           else '❌ НЕ ЗАДАН (SD 3.5 отключён)'}")
+    logger.info(f"IMAGE_STYLE:       {IMAGE_STYLE}")
     logger.info(f"ADMIN_IDS:         {ADMIN_IDS}")
 
     app = Application.builder().token(BOT_TOKEN).build()
