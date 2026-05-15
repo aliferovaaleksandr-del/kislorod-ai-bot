@@ -2400,6 +2400,8 @@ STREAMING_NAMES = {
 
 async def fetch_streaming_info(title: str) -> dict:
     """Ищет фильм/сериал через Streaming Availability API и возвращает данные."""
+    logger.info(f"=== STREAMING SEARCH: '{title}' ===")
+    logger.info(f"=== RAPIDAPI_KEY: {RAPIDAPI_KEY[:10]}... ===")
     headers = {
         "x-rapidapi-host": "streaming-availability.p.rapidapi.com",
         "x-rapidapi-key": RAPIDAPI_KEY,
@@ -2407,24 +2409,27 @@ async def fetch_streaming_info(title: str) -> dict:
     }
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            # Поиск по названию
             search_resp = await client.get(
                 "https://streaming-availability.p.rapidapi.com/shows/search/title",
                 headers=headers,
-                params={"title": title, "country": "ru", "show_type": "all", "output_language": "ru"},
+                params={"title": title, "show_type": "all"},
             )
+            logger.info(f"=== STATUS: {search_resp.status_code} ===")
+            logger.info(f"=== BODY: {search_resp.text[:500]} ===")
+
             if search_resp.status_code != 200:
-                logger.error(f"Streaming API search error {search_resp.status_code}: {search_resp.text[:200]}")
+                logger.error(f"Streaming API error {search_resp.status_code}: {search_resp.text[:200]}")
                 return {}
 
             results = search_resp.json()
-            if not results:
+            logger.info(f"=== RESULTS COUNT: {len(results) if isinstance(results, list) else type(results)} ===")
+
+            if not results or not isinstance(results, list):
                 return {}
 
-            show = results[0]  # берём первый результат
-
+            show = results[0]
             show_id    = show.get("id", "")
-            show_type  = show.get("showType", "movie")  # movie / series
+            show_type  = show.get("showType", "movie")
             title_ru   = show.get("title", title)
             title_orig = show.get("originalTitle", "")
             year       = show.get("releaseYear", "")
@@ -2433,14 +2438,15 @@ async def fetch_streaming_info(title: str) -> dict:
                          (show.get("imageSet") or {}).get("horizontalPoster", {}).get("w480", "")
             rating     = show.get("rating", "")
 
-            # Стриминги для России
             streaming_options = show.get("streamingOptions", {}).get("ru", [])
+            logger.info(f"=== STREAMING OPTIONS RU: {len(streaming_options)} ===")
+
             services = []
             seen = set()
             for opt in streaming_options:
                 service_id   = (opt.get("service") or {}).get("id", "")
                 service_name = STREAMING_NAMES.get(service_id, service_id.capitalize())
-                stream_type  = opt.get("type", "")   # subscription / rent / buy / free
+                stream_type  = opt.get("type", "")
                 link         = opt.get("link", "")
                 if service_id and service_id not in seen:
                     seen.add(service_id)
@@ -2461,7 +2467,7 @@ async def fetch_streaming_info(title: str) -> dict:
             }
 
     except Exception as e:
-        logger.error(f"fetch_streaming_info error: {e}")
+        logger.error(f"fetch_streaming_info error: {type(e).__name__}: {e}")
         return {}
 
 
