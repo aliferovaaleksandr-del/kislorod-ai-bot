@@ -390,11 +390,6 @@ async def fetch_news(query: str, language: str = "ru", page_size: int = 5) -> tu
 # ─────────────────────────────────────────────
 
 async def ask_yandex_gpt(system_prompt: str, conversation: list, retries: int = 3) -> str:
-    """
-    Отправляет запрос к Yandex GPT.
-    При ошибках 429/500/503 делает до `retries` попыток с экспоненциальным backoff.
-    Возвращает текст ответа или понятное сообщение об ошибке.
-    """
     if not YANDEX_API_KEY or not YANDEX_FOLDER_ID:
         return "Ошибка конфигурации: не заданы переменные окружения."
 
@@ -426,7 +421,6 @@ async def ask_yandex_gpt(system_prompt: str, conversation: list, retries: int = 
             if response.status_code == 200:
                 text = data["result"]["alternatives"][0]["message"]["text"].strip()
                 if not text:
-                    # Пустой ответ — возвращаем fallback
                     logger.warning("Yandex GPT вернул пустой ответ")
                     return "Не смог сформулировать ответ. Попробуй переформулировать вопрос."
                 return text
@@ -464,7 +458,6 @@ async def ask_yandex_gpt(system_prompt: str, conversation: list, retries: int = 
             logger.error(f"YandexGPT exception {type(e).__name__}: {e}")
             return "Не удалось получить ответ. Попробуй снова."
 
-    # Все попытки исчерпаны
     logger.error(f"Yandex GPT: все {retries} попытки провалились. Последняя ошибка: {last_error}")
     return f"⚠️ {last_error} Попробуй чуть позже."
 
@@ -474,10 +467,6 @@ async def ask_yandex_gpt(system_prompt: str, conversation: list, retries: int = 
 # ─────────────────────────────────────────────
 
 async def keep_typing(bot, chat_id: int, stop_event: asyncio.Event):
-    """
-    Каждые 4 секунды отправляет typing action пока не установлен stop_event.
-    Запускать через asyncio.create_task().
-    """
     from telegram.constants import ChatAction
     while not stop_event.is_set():
         try:
@@ -1022,7 +1011,6 @@ async def generate_poster_post() -> tuple:
 # ─────────────────────────────────────────────
 
 async def send_post(bot, channel: str, text: str, image_url: str = ""):
-    """Отправляет пост. С фото если есть image_url, иначе текст."""
     if not text or text.startswith("Ошибка") or text.startswith("⚠️"):
         logger.error(f"Некорректный текст поста: {text[:80]}")
         return
@@ -1169,6 +1157,36 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    if action == "new_scene":
+        context.user_data["awaiting"] = "scene"
+        await query.edit_message_text(
+            "📝 Опиши новую сцену для написания:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
+            ]]),
+        )
+        return
+
+    if action == "new_monologue":
+        context.user_data["awaiting"] = "monologue"
+        await query.edit_message_text(
+            "🎤 Опиши нового персонажа для монолога:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
+            ]]),
+        )
+        return
+
+    if action == "new_rewrite":
+        context.user_data["awaiting"] = "rewrite"
+        await query.edit_message_text(
+            "🔁 Отправь текст сцены или диалога для переписки:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
+            ]]),
+        )
+        return
+
     if action == "clear_chat":
         context.user_data["history"] = []
         role_key = context.user_data.get("role")
@@ -1200,7 +1218,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = query.message.chat_id
 
         await query.answer()
-        # Показываем пользователю какую подсказку он выбрал
         await context.bot.send_message(
             chat_id=chat_id,
             text=f"_{hint_text}_",
@@ -1253,7 +1270,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_text:
         return
 
-    # Перехват состояния ожидания ввода для /storyboard и /character
+    # Перехват состояний ожидания
     awaiting = context.user_data.get("awaiting")
     if awaiting == "storyboard":
         context.user_data.pop("awaiting", None)
@@ -1263,10 +1280,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("awaiting", None)
         await _generate_character(update, context, user_text)
         return
+    if awaiting == "scene":
+        context.user_data.pop("awaiting", None)
+        await _generate_scene(update, context, user_text)
+        return
+    if awaiting == "monologue":
+        context.user_data.pop("awaiting", None)
+        await _generate_monologue(update, context, user_text)
+        return
+    if awaiting == "rewrite":
+        # rewrite требует стиль — сохраняем текст и спрашиваем стиль
+        context.user_data["rewrite_text"] = user_text
+        context.user_data["awaiting"] = "rewrite_style"
+        await update.message.reply_text(
+            "🎨 В каком жанре/стиле переписать?\n\n"
+            "Например: _нуар, комедия, хоррор, романтика, триллер, документальный, советское кино_\n\n"
+            "Напиши жанр или стиль:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
+            ]]),
+        )
+        return
+    if awaiting == "rewrite_style":
+        context.user_data.pop("awaiting", None)
+        original_text = context.user_data.pop("rewrite_text", "")
+        await _generate_rewrite(update, context, original_text, user_text)
+        return
 
     role_key = context.user_data.get("role")
 
-    # Автороль: если роль не выбрана — назначаем "general" и сообщаем об этом
     if not role_key:
         role_key = "general"
         context.user_data["role"] = role_key
@@ -1280,7 +1323,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history = context.user_data.get("history", [])
     chat_id = update.effective_chat.id
 
-    # Запускаем фоновый typing-индикатор
     stop_typing = asyncio.Event()
     typing_task = asyncio.create_task(keep_typing(context.bot, chat_id, stop_typing))
 
@@ -1295,7 +1337,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except asyncio.CancelledError:
             pass
 
-    # Fallback если ответ пустой или ошибка
     if not response or not response.strip():
         response = "Не смог сформулировать ответ. Попробуй переформулировать вопрос или очисти историю чата."
 
@@ -1309,18 +1350,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─────────────────────────────────────────────
 
 async def storyboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Первый вызов — спрашивает описание сцены.
-    Второй вызов (с аргументом) — генерирует раскадровку.
-    Или: /storyboard <описание сцены>
-    """
     args = context.args
     if args:
-        # Описание передано сразу: /storyboard герой входит в тёмный дом
         scene_description = " ".join(args)
         await _generate_storyboard(update, context, scene_description)
     else:
-        # Запрашиваем описание
         context.user_data["awaiting"] = "storyboard"
         await update.message.reply_text(
             "🎬 Раскадровка сцены\n\n"
@@ -1376,7 +1410,6 @@ async def _generate_storyboard(update: Update, context: ContextTypes.DEFAULT_TYP
     if not response or response.startswith("⚠️"):
         response = "Не удалось сгенерировать раскадровку. Попробуй снова."
 
-    role_key = context.user_data.get("role", "general")
     await context.bot.send_message(
         chat_id=chat_id,
         text=f"🎬 Раскадровка сцены\n\n{response}",
@@ -1392,10 +1425,6 @@ async def _generate_storyboard(update: Update, context: ContextTypes.DEFAULT_TYP
 # ─────────────────────────────────────────────
 
 async def character_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /character — спрашивает имя/описание персонажа и генерирует полную карточку.
-    /character <описание> — генерирует сразу.
-    """
     args = context.args
     if args:
         char_description = " ".join(args)
@@ -1453,7 +1482,6 @@ async def _generate_character(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not response or response.startswith("⚠️"):
         response = "Не удалось создать карточку. Попробуй снова."
 
-    role_key = context.user_data.get("role", "general")
     await context.bot.send_message(
         chat_id=chat_id,
         text=f"🎭 Карточка персонажа\n\n{response}",
@@ -1463,6 +1491,238 @@ async def _generate_character(update: Update, context: ContextTypes.DEFAULT_TYPE
         ]]),
     )
 
+
+# ─────────────────────────────────────────────
+# НАПИСАТЬ СЦЕНУ — /scene
+# ─────────────────────────────────────────────
+
+async def scene_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /scene — пишет готовую сцену в сценарном формате (INT./EXT., диалоги, ремарки).
+    /scene <описание> — генерирует сразу.
+    """
+    args = context.args
+    if args:
+        await _generate_scene(update, context, " ".join(args))
+    else:
+        context.user_data["awaiting"] = "scene"
+        await update.message.reply_text(
+            "📝 Написать сцену\n\n"
+            "Опиши что должно произойти в сцене: место, персонажи, конфликт, жанр.\n\n"
+            "Например:\n"
+            "_Кухня, поздний вечер. Муж и жена выясняют отношения после долгого молчания. "
+            "Жанр — психологическая драма._",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
+            ]]),
+        )
+
+
+async def _generate_scene(update: Update, context: ContextTypes.DEFAULT_TYPE, description: str):
+    chat_id = update.effective_chat.id
+    await context.bot.send_message(chat_id=chat_id, text="⏳ Пишу сцену (~15 сек)...")
+
+    system = (
+        "Ты — профессиональный сценарист студии КИСЛОРОД ПРОДАКШЕН. "
+        "Пишешь сцены в стандартном сценарном формате: заголовок INT./EXT., "
+        "ремарки действия, имена персонажей капслоком над репликой, диалоги. "
+        "Язык живой, кинематографичный. "
+        "Отвечай ТОЛЬКО текстом сцены — без предисловий и пояснений."
+    )
+    user_msg = (
+        f"Напиши готовую сцену на основе описания:\n\n{description}\n\n"
+        "Требования:\n"
+        "— Стандартный сценарный формат (INT./EXT., ремарки, реплики)\n"
+        "— Длина: 1–2 страницы (примерно 150–300 слов)\n"
+        "— Живые, естественные диалоги\n"
+        "— Конкретные, кинематографичные ремарки (что камера может снять)\n"
+        "— Напряжение или эмоция должны быть ощутимы\n"
+        "— В конце добавь строку: КОНЕЦ СЦЕНЫ"
+    )
+
+    stop_typing = asyncio.Event()
+    typing_task = asyncio.create_task(keep_typing(context.bot, chat_id, stop_typing))
+
+    try:
+        response = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+    finally:
+        stop_typing.set()
+        typing_task.cancel()
+        try:
+            await typing_task
+        except asyncio.CancelledError:
+            pass
+
+    if not response or response.startswith("⚠️"):
+        response = "Не удалось написать сцену. Попробуй снова."
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"📝 Сцена\n\n{response}",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("📝 Новая сцена", callback_data="new_scene"),
+            InlineKeyboardButton("🔁 Переписать", callback_data="new_rewrite"),
+        ], [
+            InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
+        ]]),
+    )
+
+
+# ─────────────────────────────────────────────
+# МОНОЛОГ — /monologue
+# ─────────────────────────────────────────────
+
+async def monologue_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /monologue — пишет монолог под конкретный образ и эмоцию.
+    /monologue <описание> — генерирует сразу.
+    """
+    args = context.args
+    if args:
+        await _generate_monologue(update, context, " ".join(args))
+    else:
+        context.user_data["awaiting"] = "monologue"
+        await update.message.reply_text(
+            "🎤 Монолог для актёра\n\n"
+            "Опиши персонажа, его эмоциональное состояние и ситуацию.\n\n"
+            "Например:\n"
+            "_Мужчина 40 лет, только потерял работу. Говорит сыну, что всё будет хорошо, "
+            "но сам не верит. Горько-нежный тон._",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
+            ]]),
+        )
+
+
+async def _generate_monologue(update: Update, context: ContextTypes.DEFAULT_TYPE, description: str):
+    chat_id = update.effective_chat.id
+    await context.bot.send_message(chat_id=chat_id, text="⏳ Пишу монолог (~15 сек)...")
+
+    system = (
+        "Ты — опытный сценарист и актёрский педагог студии КИСЛОРОД ПРОДАКШЕН. "
+        "Пишешь монологи для актёров: живые, психологически точные, с подтекстом. "
+        "Монолог должен быть пригоден для работы на сцене или перед камерой. "
+        "Отвечай ТОЛЬКО текстом монолога — без предисловий, ремарок и пояснений."
+    )
+    user_msg = (
+        f"Напиши монолог для актёра на основе описания:\n\n{description}\n\n"
+        "Требования:\n"
+        "— Длина: 60–120 слов (примерно 30–60 секунд звучания)\n"
+        "— Живая разговорная речь, не литературная\n"
+        "— Подтекст важнее текста: персонаж говорит одно, думает другое\n"
+        "— Конкретные образы и детали (не абстракции)\n"
+        "— Эмоциональная дуга: монолог должен меняться от начала к концу\n"
+        "— После монолога с новой строки: АКТЁРСКАЯ ЗАМЕТКА: [1 предложение о ключевом подтексте]"
+    )
+
+    stop_typing = asyncio.Event()
+    typing_task = asyncio.create_task(keep_typing(context.bot, chat_id, stop_typing))
+
+    try:
+        response = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+    finally:
+        stop_typing.set()
+        typing_task.cancel()
+        try:
+            await typing_task
+        except asyncio.CancelledError:
+            pass
+
+    if not response or response.startswith("⚠️"):
+        response = "Не удалось написать монолог. Попробуй снова."
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"🎤 Монолог\n\n{response}",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🎤 Новый монолог", callback_data="new_monologue"),
+            InlineKeyboardButton("🔁 Переписать", callback_data="new_rewrite"),
+        ], [
+            InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
+        ]]),
+    )
+
+
+# ─────────────────────────────────────────────
+# ПЕРЕПИСАТЬ В ДРУГОМ СТИЛЕ — /rewrite
+# ─────────────────────────────────────────────
+
+async def rewrite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /rewrite — переписывает сцену или диалог в другом жанре/стиле.
+    Двухшаговый: сначала текст, потом стиль.
+    """
+    context.user_data["awaiting"] = "rewrite"
+    await update.message.reply_text(
+        "🔁 Переписать в другом стиле\n\n"
+        "Отправь текст сцены или диалога, который хочешь переписать.\n\n"
+        "Например, вставь любой диалог или описание сцены — "
+        "и я спрошу, в каком жанре переписать.",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
+        ]]),
+    )
+
+
+async def _generate_rewrite(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    original_text: str,
+    style: str,
+):
+    chat_id = update.effective_chat.id
+    await context.bot.send_message(chat_id=chat_id, text=f"⏳ Переписываю в стиле «{style}» (~15 сек)...")
+
+    system = (
+        "Ты — профессиональный сценарист студии КИСЛОРОД ПРОДАКШЕН. "
+        "Умеешь переписывать сцены и диалоги в разных жанрах и стилях, "
+        "сохраняя суть ситуации, но меняя тон, атмосферу и язык. "
+        "Отвечай ТОЛЬКО переписанным текстом — без предисловий и пояснений."
+    )
+    user_msg = (
+        f"Перепиши следующую сцену/диалог в стиле «{style}».\n\n"
+        f"ОРИГИНАЛ:\n{original_text}\n\n"
+        "Требования:\n"
+        "— Сохрани суть ситуации и персонажей\n"
+        f"— Полностью измени тон, атмосферу и язык под стиль «{style}»\n"
+        "— Длина переписанного текста примерно равна оригиналу\n"
+        "— В конце с новой строки: РЕЖИССЁРСКАЯ ЗАМЕТКА: "
+        f"[1 предложение о главном отличии этой версии от оригинала]"
+    )
+
+    stop_typing = asyncio.Event()
+    typing_task = asyncio.create_task(keep_typing(context.bot, chat_id, stop_typing))
+
+    try:
+        response = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+    finally:
+        stop_typing.set()
+        typing_task.cancel()
+        try:
+            await typing_task
+        except asyncio.CancelledError:
+            pass
+
+    if not response or response.startswith("⚠️"):
+        response = "Не удалось переписать текст. Попробуй снова."
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"🔁 Переписано в стиле «{style}»\n\n{response}",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔁 Другой стиль", callback_data="new_rewrite"),
+            InlineKeyboardButton("📝 Новая сцена", callback_data="new_scene"),
+        ], [
+            InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
+        ]]),
+    )
+
+
+# ─────────────────────────────────────────────
+# СПРАВКА И УТИЛИТЫ
+# ─────────────────────────────────────────────
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -1474,6 +1734,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/clear          — Очистить историю чата\n"
         "/storyboard     — Раскадровка сцены 🎬\n"
         "/character      — Карточка персонажа 🎭\n"
+        "/scene          — Написать сцену 📝\n"
+        "/monologue      — Монолог для актёра 🎤\n"
+        "/rewrite        — Переписать в другом стиле 🔁\n"
         "/help           — Справка\n"
     )
 
@@ -1632,6 +1895,9 @@ def main():
     app.add_handler(CommandHandler("clear",        clear_command))
     app.add_handler(CommandHandler("storyboard",   storyboard_command))
     app.add_handler(CommandHandler("character",    character_command))
+    app.add_handler(CommandHandler("scene",        scene_command))
+    app.add_handler(CommandHandler("monologue",    monologue_command))
+    app.add_handler(CommandHandler("rewrite",      rewrite_command))
 
     # Команды только для админа
     app.add_handler(CommandHandler("schedule",     schedule_command))
