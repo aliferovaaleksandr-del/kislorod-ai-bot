@@ -32,7 +32,8 @@ RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "29f8af604fmsh7f2433154c9fb3dp1c9f6ajsn
 TMDB_API_KEY = os.getenv("TMDB_API_KEY")
 REPLICATE_API_KEY = os.getenv("REPLICATE_API_KEY")
 HF_TOKEN = os.getenv("HF_TOKEN")
-IMAGE_STYLE = os.getenv("IMAGE_STYLE", "pixar")  # pixar | comic | anime | cinematic | watercolor
+TOGETHER_API_KEY = os.getenv("TOGETHER_API_KEY")
+IMAGE_STYLE = os.getenv("IMAGE_STYLE", "pixar")  # pixar | comic | anime | cinematic | watercolor  # pixar | comic | anime | cinematic | watercolor
 
 CHANNEL_KISLOROD = "@realtimeproductionn"
 CHANNEL_ACTOR = "@actorsashapotapovv"
@@ -923,6 +924,93 @@ async def generate_streaming_premiere_post() -> tuple[str, str]:
 
 
 # ─────────────────────────────────────────────
+# TOGETHER AI — FLUX (лучшее качество, $0.003/фото)
+# ─────────────────────────────────────────────
+
+async def generate_together_image(prompt: str) -> bytes | None:
+    """Генерирует через Together AI FLUX.1 — полное тело, стили, качество."""
+    if not TOGETHER_API_KEY:
+        logger.warning("Together AI: нет TOGETHER_API_KEY")
+        return None
+
+    STYLE_SUFFIXES = {
+        "pixar": (
+            ", Pixar 3D animation style, Disney Pixar movie render, "
+            "full body character, expressive cartoon face, vibrant colors, "
+            "studio lighting, 8k render, smooth 3D, whole person visible head to toe"
+        ),
+        "comic": (
+            ", Marvel comic book art style, bold ink outlines, "
+            "full body shot, dynamic pose, vivid saturated colors, "
+            "superhero poster art, sharp clean lines, whole character visible"
+        ),
+        "anime": (
+            ", Studio Ghibli anime style, full body character, "
+            "detailed anime face, large expressive eyes, soft cel shading, "
+            "vibrant anime colors, whole person visible head to toe"
+        ),
+        "cinematic": (
+            ", cinematic movie poster, full body shot, sharp focus on face, "
+            "photorealistic skin, dramatic lighting, 8k, anamorphic lens, "
+            "whole person visible, professional photography"
+        ),
+        "watercolor": (
+            ", watercolor painting style, full body illustration, "
+            "loose brushstrokes, soft color washes, artistic concept art, "
+            "warm palette, whole character visible head to toe"
+        ),
+    }
+
+    suffix = STYLE_SUFFIXES.get(IMAGE_STYLE, STYLE_SUFFIXES["pixar"])
+    # Явно просим полное тело
+    full_prompt = (
+        prompt + suffix +
+        ", full body visible, complete character from head to toe, "
+        "no cropping, wide shot, entire figure in frame"
+    )
+    logger.info(f"Together AI: стиль={IMAGE_STYLE}, промпт={full_prompt[:100]}...")
+
+    payload = {
+        "model": "black-forest-labs/FLUX.1-schnell-Free",  # бесплатная квота
+        "prompt": full_prompt,
+        "width": 768,
+        "height": 1344,   # высокий формат — больше места для тела
+        "steps": 4,
+        "n": 1,
+        "response_format": "b64_json",
+    }
+
+    headers = {
+        "Authorization": f"Bearer {TOGETHER_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            resp = await client.post(
+                "https://api.together.xyz/v1/images/generations",
+                json=payload,
+                headers=headers,
+            )
+        if resp.status_code == 200:
+            data = resp.json()
+            b64 = data["data"][0].get("b64_json")
+            if b64:
+                import base64
+                logger.info("Together AI: успех!")
+                return base64.b64decode(b64)
+            # Иногда возвращает URL
+            url = data["data"][0].get("url")
+            if url:
+                return await _download_image(url)
+        logger.error(f"Together AI error {resp.status_code}: {resp.text[:300]}")
+        return None
+    except Exception as e:
+        logger.error(f"Together AI exception: {e}")
+        return None
+
+
+# ─────────────────────────────────────────────
 # HUGGING FACE — ОСНОВНАЯ ГЕНЕРАЦИЯ (SD 3.5 Large)
 # ─────────────────────────────────────────────
 
@@ -932,12 +1020,16 @@ async def generate_hf_image(prompt: str) -> bytes | None:
         logger.warning("HuggingFace: нет HF_TOKEN")
         return None
 
-    # Список моделей — пробуем по очереди если одна недоступна
-    models = [
-        "black-forest-labs/FLUX.1-dev",
-        "black-forest-labs/FLUX.1-schnell",
-        "stabilityai/stable-diffusion-3.5-large",
-    ]
+    # Модель выбирается по стилю
+    STYLE_MODELS = {
+        "pixar":      ["stablediffusionapi/disney-pixar-cartoon", "Yntec/BeauteouxMIX3", "stabilityai/stable-diffusion-xl-base-1.0"],
+        "comic":      ["Yntec/Marvel-Diffusion", "ogkalu/comic-diffusion", "stabilityai/stable-diffusion-xl-base-1.0"],
+        "anime":      ["Linaqruf/anything-v3.0", "hakurei/waifu-diffusion", "stabilityai/stable-diffusion-xl-base-1.0"],
+        "cinematic":  ["black-forest-labs/FLUX.1-dev", "black-forest-labs/FLUX.1-schnell", "stabilityai/stable-diffusion-3.5-large"],
+        "watercolor": ["Yntec/Colorful2", "stabilityai/stable-diffusion-xl-base-1.0", "black-forest-labs/FLUX.1-schnell"],
+    }
+    models = STYLE_MODELS.get(IMAGE_STYLE, STYLE_MODELS["cinematic"])
+    logger.info(f"HuggingFace: модели для стиля '{IMAGE_STYLE}': {models[0]}")
 
     headers = {
         "Authorization": f"Bearer {HF_TOKEN}",
@@ -949,76 +1041,58 @@ async def generate_hf_image(prompt: str) -> bytes | None:
     STYLE_PRESETS = {
         "cinematic": {
             "suffix": (
-                ", sharp focus on faces, highly detailed facial features, "
-                "photorealistic skin texture, ultra detailed eyes, "
-                "professional cinema photography, dramatic lighting, "
-                "8k resolution, film grain, anamorphic lens"
+                ", sharp focus, highly detailed face, photorealistic, "
+                "dramatic cinematic lighting, 8k, film poster"
             ),
             "negative": (
-                "blurry face, deformed face, ugly, bad anatomy, "
-                "blurry eyes, disfigured, low quality, watermark, text"
+                "blurry, deformed, ugly, bad anatomy, low quality, watermark, text"
             ),
-            "guidance": 4.5,
-            "steps": 45,
+            "guidance": 7.5,
+            "steps": 30,
         },
         "pixar": {
             "suffix": (
-                ", Pixar 3D animation style, Disney Pixar movie, "
-                "highly detailed 3D render, expressive cartoon faces, "
-                "vibrant colors, subsurface scattering skin, "
-                "studio lighting, cinematic composition, 8k render, "
-                "Pixar studio quality, smooth 3D character design"
+                ", disney pixar style, 3d cartoon, cute expressive face, "
+                "full body, vibrant colors, studio lighting, animated movie"
             ),
             "negative": (
-                "realistic photo, blurry, deformed, ugly, "
-                "low quality, watermark, text, 2D flat"
+                "realistic, photo, blurry, deformed, ugly, low quality, watermark, text"
             ),
-            "guidance": 5.0,
-            "steps": 45,
+            "guidance": 7.5,
+            "steps": 30,
         },
         "comic": {
             "suffix": (
-                ", Marvel comic book art style, bold ink outlines, "
-                "dynamic comic panel composition, vivid saturated colors, "
-                "Ben-Day dots shading, superhero poster art, "
-                "Jack Kirby style, professional comic illustration, "
-                "sharp clean lines, dramatic perspective"
+                ", marvel comics style, comic book art, bold ink outlines, "
+                "full body, vivid colors, superhero poster, dynamic pose"
             ),
             "negative": (
-                "photo realistic, blurry, deformed, ugly, "
-                "low quality, watermark, pencil sketch, unfinished"
+                "photo, realistic, blurry, deformed, ugly, low quality, watermark, text"
             ),
-            "guidance": 5.5,
-            "steps": 40,
+            "guidance": 8.0,
+            "steps": 30,
         },
         "anime": {
             "suffix": (
-                ", Studio Ghibli anime style, beautiful anime art, "
-                "detailed anime faces, large expressive eyes, "
-                "soft cel shading, vibrant anime colors, "
-                "Hayao Miyazaki style, professional anime illustration, "
-                "cinematic anime composition"
+                ", anime style, full body character, detailed anime face, "
+                "large eyes, cel shading, vibrant colors, manga illustration"
             ),
             "negative": (
-                "realistic photo, blurry, deformed, ugly, "
-                "low quality, watermark, text, 3D render"
+                "realistic, photo, blurry, deformed, ugly, low quality, watermark, text"
             ),
-            "guidance": 5.0,
-            "steps": 40,
+            "guidance": 7.5,
+            "steps": 30,
         },
         "watercolor": {
             "suffix": (
-                ", beautiful watercolor painting, loose brushstrokes, "
-                "soft color washes, artistic illustration, "
-                "professional concept art, painterly texture, "
-                "warm palette, editorial illustration style"
+                ", watercolor painting, full body, soft brushstrokes, "
+                "artistic illustration, warm colors, painterly"
             ),
             "negative": (
-                "photo realistic, blurry, deformed, ugly, "
-                "low quality, watermark, text, digital art"
+                "photo, realistic, blurry, deformed, ugly, low quality, watermark, text"
             ),
-            "guidance": 4.0,
-            "steps": 40,
+            "guidance": 7.0,
+            "steps": 30,
         },
     }
 
@@ -1245,12 +1319,19 @@ async def generate_yandex_art(prompt: str) -> bytes | None:
 async def generate_image(prompt: str) -> bytes | None:
     """
     Основная функция генерации изображений.
-    1. Hugging Face SD 3.5 Large (бесплатно, основной)
-    2. Replicate FLUX 1.1 Pro (платный резерв)
-    3. YandexART (последний резерв)
+    1. Together AI FLUX (лучшее качество + стили, почти бесплатно)
+    2. HuggingFace FLUX.1-dev (бесплатно, резерв)
+    3. Replicate FLUX 1.1 Pro (платный резерв)
+    4. YandexART (последний резерв)
     """
+    if TOGETHER_API_KEY:
+        logger.info("Генерация через Together AI FLUX...")
+        result = await generate_together_image(prompt)
+        if result:
+            return result
+        logger.warning("Together AI не ответил, переключаюсь на HuggingFace...")
     if HF_TOKEN:
-        logger.info("Генерация через HuggingFace SD 3.5...")
+        logger.info("Генерация через HuggingFace...")
         result = await generate_hf_image(prompt)
         if result:
             return result
