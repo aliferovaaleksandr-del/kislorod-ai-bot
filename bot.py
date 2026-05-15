@@ -68,7 +68,7 @@ def admin_only(func):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         if user_id not in ADMIN_IDS:
-            await update.message.reply_text("⛔ У вас нет доступа к этой команде.")
+            await update.message.reply_text(f"⛔ Нет доступа. Ваш ID: {user_id}")
             logger.warning(f"Попытка доступа к admin-команде от user_id={user_id}")
             return
         return await func(update, context)
