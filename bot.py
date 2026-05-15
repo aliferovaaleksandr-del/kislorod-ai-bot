@@ -1024,20 +1024,35 @@ async def generate_hf_image(prompt: str) -> bytes | None:
 
     logger.info(f"HuggingFace: используется стиль '{IMAGE_STYLE}'")
     style = STYLE_PRESETS.get(IMAGE_STYLE, STYLE_PRESETS["pixar"])
-    enhanced_prompt = prompt + style["suffix"]
 
-    payload = {
-        "inputs": enhanced_prompt,
-        "parameters": {
-            "guidance_scale": style["guidance"],
-            "num_inference_steps": style["steps"],
-            "width": 768,
-            "height": 1024,
-            "negative_prompt": style["negative"],
-        },
-    }
+    # Стиль встраиваем прямо в промпт — FLUX не поддерживает negative_prompt через HF API
+    enhanced_prompt = prompt + style["suffix"]
+    logger.info(f"HuggingFace: промпт = {enhanced_prompt[:120]}...")
 
     for model in models:
+        # FLUX использует простой формат, SD поддерживает доп. параметры
+        if "flux" in model.lower():
+            payload = {
+                "inputs": enhanced_prompt,
+                "parameters": {
+                    "guidance_scale": style["guidance"],
+                    "num_inference_steps": style["steps"],
+                    "width": 768,
+                    "height": 1024,
+                },
+            }
+        else:
+            payload = {
+                "inputs": enhanced_prompt,
+                "parameters": {
+                    "guidance_scale": style["guidance"],
+                    "num_inference_steps": style["steps"],
+                    "width": 768,
+                    "height": 1024,
+                    "negative_prompt": style["negative"],
+                },
+            }
+
         try:
             logger.info(f"HuggingFace: пробую модель {model}...")
             async with httpx.AsyncClient(timeout=120.0) as client:
