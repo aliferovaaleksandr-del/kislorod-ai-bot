@@ -28,7 +28,7 @@ YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 KINOPOISK_API_KEY = os.getenv("KINOPOISK_API_KEY")
-RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "29f8af604fmsh7f2433154c9fb3dp1c9f6ajsnf6ab497a500d")
 
 CHANNEL_KISLOROD = "@realtimeproductionn"
 CHANNEL_ACTOR = "@actorsashapotapovv"
@@ -702,18 +702,20 @@ async def fetch_streaming_shows(
     order_by: str = "popularity_1week",
     genres: list = None,
     page: int = 1,
+    country: str = "ru",
 ) -> list:
     """
     Получает список показов из Streaming Availability API.
     show_type: 'movie' | 'series'
     genres: список id жанров, например ['animation', 'family']
+    country: страна ('ru', 'us', 'de' и т.д.)
     """
     headers = {
         "x-rapidapi-host": "streaming-availability.p.rapidapi.com",
         "x-rapidapi-key": RAPIDAPI_KEY,
     }
     params = {
-        "country": "ru",
+        "country": country,
         "order_by": order_by,
         "show_type": show_type,
         "series_granularity": "show",
@@ -731,15 +733,41 @@ async def fetch_streaming_shows(
                 headers=headers,
                 params=params,
             )
-        logger.info(f"Streaming [{show_type}] status={resp.status_code}")
+        logger.info(f"Streaming [{show_type}] country={country} status={resp.status_code}")
+        if resp.status_code == 403:
+            logger.error(f"Streaming API 403 — проверь RAPIDAPI_KEY или план подписки")
+            return []
+        if resp.status_code == 429:
+            logger.error(f"Streaming API 429 — превышен лимит запросов (бесплатный план)")
+            return []
         if resp.status_code != 200:
-            logger.error(f"Streaming API error: {resp.text[:300]}")
+            logger.error(f"Streaming API error {resp.status_code}: {resp.text[:300]}")
             return []
         data = resp.json()
-        return data.get("shows", [])
+        shows = data.get("shows", [])
+        logger.info(f"Streaming [{show_type}] country={country} → найдено {len(shows)} шоу")
+        return shows
     except Exception as e:
         logger.error(f"fetch_streaming_shows error: {e}")
         return []
+
+
+async def fetch_streaming_shows_with_fallback(
+    show_type: str = "movie",
+    order_by: str = "popularity_1week",
+    genres: list = None,
+) -> list:
+    """
+    Пробует ru → us → de. Возвращает первый непустой результат.
+    """
+    for country in ["ru", "us", "de"]:
+        shows = await fetch_streaming_shows(show_type, order_by, genres, country=country)
+        if shows:
+            logger.info(f"Streaming: использован country={country}")
+            return shows
+        logger.warning(f"Streaming: country={country} вернул пустой список, пробуем следующую страну")
+    logger.error("Streaming: все страны (ru/us/de) вернули пустой список")
+    return []
 
 
 def _pick_show(shows: list) -> dict:
@@ -809,16 +837,16 @@ def _build_streaming_post(show: dict, emoji: str, hashtags: str) -> tuple[str, s
 
 async def generate_streaming_film_post() -> tuple[str, str]:
     """Новинка — фильм (не мультик)."""
-    shows = await fetch_streaming_shows("movie", order_by="popularity_1week")
+    shows = await fetch_streaming_shows_with_fallback("movie", order_by="popularity_1week")
     # Исключаем мультфильмы
     shows = [s for s in shows if not any(
         g.get("id") in ("animation", "family") for g in (s.get("genres") or [])
     )]
     if not shows:
-        shows = await fetch_streaming_shows("movie", order_by="popularity_alltime")
+        shows = await fetch_streaming_shows_with_fallback("movie", order_by="popularity_alltime")
     show = _pick_show(shows)
     if not show:
-        return "", ""
+        return await _generate_gpt_film_post(), ""
     _used_show_ids.add(show.get("id"))
     return _build_streaming_post(
         show,
@@ -829,12 +857,12 @@ async def generate_streaming_film_post() -> tuple[str, str]:
 
 async def generate_streaming_series_post() -> tuple[str, str]:
     """Новинка — сериал."""
-    shows = await fetch_streaming_shows("series", order_by="popularity_1week")
+    shows = await fetch_streaming_shows_with_fallback("series", order_by="popularity_1week")
     if not shows:
-        shows = await fetch_streaming_shows("series", order_by="popularity_alltime")
+        shows = await fetch_streaming_shows_with_fallback("series", order_by="popularity_alltime")
     show = _pick_show(shows)
     if not show:
-        return "", ""
+        return await _generate_gpt_series_post(), ""
     _used_show_ids.add(show.get("id"))
     return _build_streaming_post(
         show,
@@ -845,16 +873,16 @@ async def generate_streaming_series_post() -> tuple[str, str]:
 
 async def generate_streaming_cartoon_post() -> tuple[str, str]:
     """Новинка — мультфильм / анимация."""
-    shows = await fetch_streaming_shows("movie", genres=["animation"])
+    shows = await fetch_streaming_shows_with_fallback("movie", genres=["animation"])
     if not shows:
         # Fallback: все фильмы, фильтруем по жанру
-        all_shows = await fetch_streaming_shows("movie", order_by="popularity_alltime")
+        all_shows = await fetch_streaming_shows_with_fallback("movie", order_by="popularity_alltime")
         shows = [s for s in all_shows if any(
             g.get("id") in ("animation", "family") for g in (s.get("genres") or [])
         )]
     show = _pick_show(shows)
     if not show:
-        return "", ""
+        return await _generate_gpt_cartoon_post(), ""
     _used_show_ids.add(show.get("id"))
     return _build_streaming_post(
         show,
@@ -865,18 +893,61 @@ async def generate_streaming_cartoon_post() -> tuple[str, str]:
 
 async def generate_streaming_premiere_post() -> tuple[str, str]:
     """Премьера — самое свежее по дате выхода."""
-    shows = await fetch_streaming_shows("movie", order_by="release_year")
+    shows = await fetch_streaming_shows_with_fallback("movie", order_by="release_year")
     if not shows:
-        shows = await fetch_streaming_shows("series", order_by="release_year")
+        shows = await fetch_streaming_shows_with_fallback("series", order_by="release_year")
     show = _pick_show(shows)
     if not show:
-        return "", ""
+        return await _generate_gpt_film_post(), ""
     _used_show_ids.add(show.get("id"))
     return _build_streaming_post(
         show,
         emoji="🔥",
         hashtags="#премьера #новинка #кино #кислородпродакшен",
     )
+
+
+
+# ─────────────────────────────────────────────
+# GPT-FALLBACK ПОСТЫ (когда Streaming API недоступен)
+# ─────────────────────────────────────────────
+
+async def _generate_gpt_film_post() -> str:
+    """Генерирует пост о фильме через YandexGPT когда Streaming API недоступен."""
+    logger.warning("Streaming API недоступен — генерирую пост о фильме через YandexGPT")
+    system = "Ты — редактор Telegram-канала о кино. Отвечай ТОЛЬКО текстом поста — без пояснений."
+    user_msg = (
+        "Напиши пост о популярном фильме последних лет для Telegram-канала. "
+        "Придумай интересный обзор реального фильма. "
+        "150–250 слов, 1–2 эмодзи. "
+        "Хэштеги: #кино #новинка #фильм #кислородпродакшен"
+    )
+    return await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+
+
+async def _generate_gpt_series_post() -> str:
+    """Генерирует пост о сериале через YandexGPT когда Streaming API недоступен."""
+    logger.warning("Streaming API недоступен — генерирую пост о сериале через YandexGPT")
+    system = "Ты — редактор Telegram-канала о кино. Отвечай ТОЛЬКО текстом поста — без пояснений."
+    user_msg = (
+        "Напиши пост о популярном сериале последних лет для Telegram-канала. "
+        "Придумай интересный обзор реального сериала. "
+        "150–250 слов, 1–2 эмодзи. "
+        "Хэштеги: #сериал #новинка #стриминг #кислородпродакшен"
+    )
+    return await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+
+
+async def _generate_gpt_cartoon_post() -> str:
+    """Генерирует пост о мультфильме через YandexGPT когда Streaming API недоступен."""
+    logger.warning("Streaming API недоступен — генерирую пост о мультфильме через YandexGPT")
+    system = "Ты — редактор Telegram-канала о кино. Отвечай ТОЛЬКО текстом поста — без пояснений."
+    user_msg = (
+        "Напиши пост об интересном мультфильме или анимации последних лет для Telegram-канала. "
+        "150–250 слов, 1–2 эмодзи. "
+        "Хэштеги: #мультфильм #анимация #кислородпродакшен"
+    )
+    return await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
 
 
 # ─────────────────────────────────────────────
@@ -2145,7 +2216,10 @@ async def series_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await send_post(context.bot, CHANNEL_ACTOR, text, img, parse_mode="Markdown")
         await update.message.reply_text("✅ Сериал опубликован в оба канала!")
     else:
-        await update.message.reply_text("❌ Не удалось. Проверь RAPIDAPI_KEY.")
+        await update.message.reply_text(
+            "❌ Streaming API недоступен и YandexGPT тоже не ответил.\n"
+            "Проверь логи Railway — там будет точная причина (403/429/пустой список)."
+        )
 
 
 @admin_only
