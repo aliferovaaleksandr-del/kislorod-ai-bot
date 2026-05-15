@@ -80,6 +80,7 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 # ─────────────────────────────────────────────
@@ -246,6 +247,13 @@ def tools_keyboard(context: ContextTypes.DEFAULT_TYPE = None) -> InlineKeyboardM
         [
             InlineKeyboardButton("🔁 Переписать стиль", callback_data="tool_rewrite"),
             InlineKeyboardButton("💾 Мои сохранения", callback_data="show_saves"),
+        ],
+        [
+            InlineKeyboardButton("🖼 Генератор постера", callback_data="tool_poster"),
+            InlineKeyboardButton("📄 Разбор сценария", callback_data="tool_analyze"),
+        ],
+        [
+            InlineKeyboardButton("🎯 AI-Питчинг", callback_data="tool_pitch"),
         ],
     ]
     if context is not None:
@@ -598,6 +606,7 @@ SAVE_TYPE_LABELS = {
     "monologue":  "🎤 Монолог",
     "rewrite":    "🔁 Перезапись",
     "chat":       "💬 Ответ",
+    "producer":   "🎯 Питч",
 }
 
 SAVE_FOLDERS = {
@@ -607,6 +616,7 @@ SAVE_FOLDERS = {
     "monologue":  "🎤 Монологи",
     "rewrite":    "🔁 Перезаписи",
     "chat":       "💬 Ответы",
+    "producer":   "🎯 Питчи",
 }
 
 
@@ -907,6 +917,66 @@ async def generate_streaming_premiere_post() -> tuple[str, str]:
 
 
 
+
+
+# ─────────────────────────────────────────────
+# YANDEX ART — ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ
+# ─────────────────────────────────────────────
+
+async def generate_yandex_art(prompt: str) -> bytes | None:
+    """Генерирует изображение через YandexART. Возвращает bytes или None."""
+    if not YANDEX_API_KEY or not YANDEX_FOLDER_ID:
+        logger.warning("YandexART: нет YANDEX_API_KEY или YANDEX_FOLDER_ID")
+        return None
+
+    headers = {
+        "Authorization": f"Api-Key {YANDEX_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "modelUri": f"art://{YANDEX_FOLDER_ID}/yandex-art/latest",
+        "generationOptions": {"seed": random.randint(1, 9999999), "aspectRatio": {"widthRatio": 2, "heightRatio": 3}},
+        "messages": [{"weight": 1, "text": prompt}],
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                "https://llm.api.cloud.yandex.net/foundationModels/v1/imageGenerationAsync",
+                json=payload, headers=headers,
+            )
+        if resp.status_code != 200:
+            logger.error(f"YandexART submit error {resp.status_code}: {resp.text[:200]}")
+            return None
+
+        operation_id = resp.json().get("id")
+        if not operation_id:
+            logger.error("YandexART: нет operation_id")
+            return None
+
+        # Polling результата
+        for attempt in range(20):
+            await asyncio.sleep(3)
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                poll = await client.get(
+                    f"https://llm.api.cloud.yandex.net/operations/{operation_id}",
+                    headers=headers,
+                )
+            data = poll.json()
+            if data.get("done"):
+                b64 = data.get("response", {}).get("image", "")
+                if b64:
+                    import base64
+                    return base64.b64decode(b64)
+                logger.error(f"YandexART: done но нет image. response={data.get('response')}")
+                return None
+
+        logger.error("YandexART: таймаут (60 сек)")
+        return None
+
+    except Exception as e:
+        logger.error(f"YandexART exception: {e}")
+        return None
 
 # ─────────────────────────────────────────────
 # TMDB API — НОВИНКИ ФИЛЬМОВ И СЕРИАЛОВ
@@ -1354,6 +1424,344 @@ async def job_actor_evening(context):
     await send_post(context.bot, CHANNEL_ACTOR, text, img)
 
 
+
+# ─────────────────────────────────────────────
+# ЦИТАТА ДНЯ
+# ─────────────────────────────────────────────
+
+async def generate_quote_post() -> str:
+    system = "Ты — редактор вдохновляющего Telegram-канала о кино. Отвечай ТОЛЬКО текстом поста."
+    user_msg = (
+        "Напиши вдохновляющий пост с цитатой великого режиссёра, сценариста или актёра. "
+        "Формат:\n"
+        "🎬 Цитата дня\n\n"
+        "«[цитата]»\n\n"
+        "— [Имя автора], [профессия]\n\n"
+        "[2-3 предложения почему эта цитата важна для творческих людей]\n\n"
+        "#цитатадня #кино #кислородпродакшен"
+    )
+    return await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+
+
+# ─────────────────────────────────────────────
+# КИНО-ФАКТ
+# ─────────────────────────────────────────────
+
+async def generate_kinofact_post() -> str:
+    system = "Ты — редактор познавательного Telegram-канала о кино. Отвечай ТОЛЬКО текстом поста."
+    user_msg = (
+        "Напиши интересный пост с малоизвестным фактом о съёмках знаменитого фильма. "
+        "Формат:\n"
+        "🎥 Кино-факт\n\n"
+        "[интересный факт о съёмках, 100-150 слов]\n\n"
+        "#кинофакт #кино #кислородпродакшен"
+    )
+    return await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+
+
+# ─────────────────────────────────────────────
+# ОПРОС НЕДЕЛИ
+# ─────────────────────────────────────────────
+
+WEEKLY_POLLS = [
+    ("🎬 Какой жанр кино вам нравится больше всего?",
+     ["🎭 Драма", "😂 Комедия", "🔥 Боевик", "👻 Хоррор", "🚀 Фантастика", "❤️ Мелодрама"]),
+    ("📺 Что вы предпочитаете смотреть?",
+     ["🎬 Фильмы", "📺 Сериалы", "🎨 Мультфильмы", "📹 Документальное"]),
+    ("🤖 Как вы относитесь к AI в кино?",
+     ["🔥 Это будущее!", "🤔 Зависит от использования", "😟 Предпочитаю классику", "🎯 Главное — результат"]),
+    ("🎭 Кто важнее в кино?",
+     ["🎬 Режиссёр", "✍️ Сценарист", "🎭 Актёр", "💼 Продюсер"]),
+    ("🌍 Какое кино вы смотрите чаще?",
+     ["🇷🇺 Российское", "🇺🇸 Голливуд", "🌏 Азиатское", "🌍 Европейское"]),
+]
+
+_poll_index = 0
+
+
+async def send_weekly_poll(bot, channel: str):
+    global _poll_index
+    question, options = WEEKLY_POLLS[_poll_index % len(WEEKLY_POLLS)]
+    _poll_index += 1
+    try:
+        await bot.send_poll(
+            chat_id=channel,
+            question=question,
+            options=options,
+            is_anonymous=True,
+        )
+        logger.info(f"✅ Опрос → {channel}")
+        _stats["posts_sent"] += 1
+    except Exception as e:
+        logger.error(f"Ошибка отправки опроса в {channel}: {e}")
+
+
+# ─────────────────────────────────────────────
+# ГЕНЕРАТОР ПОСТЕРА (YandexART) — команда /poster
+# ─────────────────────────────────────────────
+
+async def poster_command(update, context):
+    _stats_inc_tool("poster")
+    args = context.args
+    if args:
+        await _generate_poster(update, context, " ".join(args))
+    else:
+        context.user_data["awaiting"] = "poster"
+        await update.message.reply_text(
+            "🖼 Генератор постера\n\n"
+            "Опиши свой проект — жанр, атмосферу, главного героя.\n\n"
+            "_Например: Мрачный детектив, ночной город, дождь, одинокий следователь_",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting")]]),
+        )
+
+
+async def _generate_poster(update, context, description: str):
+    import io
+    chat_id = update.effective_chat.id
+    msg = await context.bot.send_message(chat_id=chat_id, text="🖼 Генерирую постер (~30-60 сек)...")
+
+    # Сначала через GPT делаем красивый промпт для арта
+    system = "Ты — арт-директор. Создай промпт для генерации постера фильма на английском языке."
+    user_msg = f"Проект: {description}\n\nСоздай детальный промпт для постера: стиль, цвета, композиция, атмосфера. Только промпт, без пояснений. На английском."
+    art_prompt = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+    art_prompt = f"Movie poster, cinematic, professional: {art_prompt[:300]}"
+
+    image_bytes = await generate_yandex_art(art_prompt)
+
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
+    except Exception:
+        pass
+
+    if image_bytes:
+        bio = io.BytesIO(image_bytes)
+        bio.name = "poster.jpg"
+        await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=bio,
+            caption=f"🖼 Постер для: _{description[:60]}_\n\n✨ Студия КИСЛОРОД ПРОДАКШЕН",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Новый постер", callback_data="tool_poster")],
+                [InlineKeyboardButton("◀️ Назад", callback_data="back_to_hints")],
+            ]),
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="⚠️ Не удалось сгенерировать постер. Попробуй ещё раз или переформулируй описание.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Попробовать снова", callback_data="tool_poster")]]),
+        )
+
+
+# ─────────────────────────────────────────────
+# РАЗБОР СЦЕНАРИЯ — команда /analyze
+# ─────────────────────────────────────────────
+
+async def analyze_command(update, context):
+    _stats_inc_tool("analyze")
+    context.user_data["awaiting"] = "analyze"
+    await update.message.reply_text(
+        "📄 Разбор сценария\n\n"
+        "Отправь текст своей сцены или фрагмента сценария — я дам профессиональный разбор.\n\n"
+        "_Структура, персонажи, диалоги, подтекст, что улучшить_",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting")]]),
+    )
+
+
+async def _generate_analysis(update, context, script_text: str):
+    chat_id = update.effective_chat.id
+    progress_id = await send_progress(context.bot, chat_id, "📄 Анализирую сценарий...")
+
+    system = (
+        "Ты — профессиональный сценарный редактор студии КИСЛОРОД ПРОДАКШЕН. "
+        "Даёшь детальный разбор сценариев. Отвечай ТОЛЬКО разбором — без предисловий."
+    )
+    user_msg = (
+        f"Сделай профессиональный разбор этого фрагмента сценария:\n\n{script_text[:2000]}\n\n"
+        "Структура разбора:\n"
+        "📖 СТРУКТУРА — как выстроена сцена\n"
+        "🎭 ПЕРСОНАЖИ — убедительность, мотивация\n"
+        "💬 ДИАЛОГИ — живость, подтекст, проблемы\n"
+        "🎬 ВИЗУАЛЬНОСТЬ — кинематографичность\n"
+        "⚡ ЧТО РАБОТАЕТ — сильные стороны\n"
+        "🔧 ЧТО УЛУЧШИТЬ — конкретные рекомендации\n"
+        "⭐ ОЦЕНКА — /10 с кратким выводом"
+    )
+
+    stop_typing = asyncio.Event()
+    typing_task = asyncio.create_task(keep_typing(context.bot, chat_id, stop_typing))
+    try:
+        response = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+    finally:
+        stop_typing.set(); typing_task.cancel()
+        try: await typing_task
+        except asyncio.CancelledError: pass
+
+    await delete_progress(context.bot, chat_id, progress_id)
+
+    short_title = script_text[:30]
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"📄 Разбор сценария\n\n{response}",
+        reply_markup=InlineKeyboardMarkup([
+            make_save_row("scene", short_title),
+            [InlineKeyboardButton("📄 Разобрать ещё", callback_data="tool_analyze")],
+            [InlineKeyboardButton("◀️ Назад", callback_data="back_to_hints")],
+        ]),
+    )
+
+
+# ─────────────────────────────────────────────
+# AI-ПИТЧИНГ — команда /pitch
+# ─────────────────────────────────────────────
+
+async def pitch_command(update, context):
+    _stats_inc_tool("pitch")
+    context.user_data["awaiting"] = "pitch"
+    await update.message.reply_text(
+        "🎯 AI-Питчинг\n\n"
+        "Опиши свою идею проекта в 1-3 предложениях — я создам полноценный питч-документ.\n\n"
+        "_Например: Сериал о молодом хакере в Москве 90-х, который случайно взламывает сервер ФСБ_",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting")]]),
+    )
+
+
+async def _generate_pitch(update, context, idea: str):
+    chat_id = update.effective_chat.id
+    progress_id = await send_progress(context.bot, chat_id, "🎯 Создаю питч-документ...")
+
+    system = (
+        "Ты — опытный продюсер студии КИСЛОРОД ПРОДАКШЕН. "
+        "Создаёшь профессиональные питч-документы. Отвечай ТОЛЬКО питчем — без предисловий."
+    )
+    user_msg = (
+        f"Создай питч-документ для проекта:\n\n{idea}\n\n"
+        "Структура:\n"
+        "🎬 НАЗВАНИЕ — придумай цепляющее название\n"
+        "📖 СИНОПСИС — 3-4 предложения о сюжете\n"
+        "🎭 ГЛАВНЫЕ ГЕРОИ — 2-3 персонажа с характеристиками\n"
+        "🎯 ЦЕЛЕВАЯ АУДИТОРИЯ — кто будет смотреть\n"
+        "🌍 РЫНОК — где и как распространять\n"
+        "💰 ФОРМАТ И БЮДЖЕТ — тип проекта, примерный бюджет\n"
+        "⚡ ПОЧЕМУ СЕЙЧАС — актуальность идеи\n"
+        "✨ УНИКАЛЬНОСТЬ — чем отличается от конкурентов"
+    )
+
+    stop_typing = asyncio.Event()
+    typing_task = asyncio.create_task(keep_typing(context.bot, chat_id, stop_typing))
+    try:
+        response = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+    finally:
+        stop_typing.set(); typing_task.cancel()
+        try: await typing_task
+        except asyncio.CancelledError: pass
+
+    await delete_progress(context.bot, chat_id, progress_id)
+
+    short_title = idea[:30]
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"🎯 Питч-документ\n\n{response}",
+        reply_markup=InlineKeyboardMarkup([
+            make_save_row("producer", short_title),
+            [InlineKeyboardButton("🎯 Новый питч", callback_data="tool_pitch")],
+            [InlineKeyboardButton("◀️ Назад", callback_data="back_to_hints")],
+        ]),
+    )
+
+
+async def job_quote_day(context):
+    """Цитата дня — оба канала"""
+    text = await generate_quote_post()
+    await send_post(context.bot, CHANNEL_KISLOROD, text)
+    await send_post(context.bot, CHANNEL_ACTOR, text)
+
+
+async def job_kinofact(context):
+    """Кино-факт — оба канала"""
+    text = await generate_kinofact_post()
+    await send_post(context.bot, CHANNEL_KISLOROD, text)
+    await send_post(context.bot, CHANNEL_ACTOR, text)
+
+
+async def job_weekly_poll(context):
+    """Опрос недели — оба канала (каждое воскресенье)"""
+    await send_weekly_poll(context.bot, CHANNEL_KISLOROD)
+    await send_weekly_poll(context.bot, CHANNEL_ACTOR)
+
+
+# ─────────────────────────────────────────────
+# АВТОПОСТИНГ ПОСТЕРОВ В КАНАЛЫ
+# ─────────────────────────────────────────────
+
+POSTER_THEMES = [
+    ("Таинственный детектив в ночном городе, неон, дождь, одинокий следователь", "🔍 Детектив"),
+    ("Эпическая космическая опера, звёздные корабли, далёкие галактики", "🚀 Sci-Fi"),
+    ("Мрачная сказка, тёмный лес, волшебный замок, таинственная героиня", "🧙 Фэнтези"),
+    ("Советский ретро-триллер, 1970-е, Москва, шпионы и секреты", "🕵️ Ретро"),
+    ("Постапокалиптический мир, выжженная пустыня, последний герой", "💀 Постапок"),
+    ("Романтическая драма, Париж, закат, двое на мосту", "❤️ Драма"),
+    ("Боевик в стиле нуар, чёрно-белое, джаз, преступный мир", "🎷 Нуар"),
+    ("Анимационный мультфильм, яркие краски, волшебные существа, дети-герои", "🎨 Анимация"),
+    ("Хоррор, старый особняк, туман, призраки, полночь", "👻 Хоррор"),
+    ("Историческая эпопея, Древняя Русь, богатыри, битва", "⚔️ Эпик"),
+    ("Молодёжная комедия, студенческий кампус, яркое лето, дружба", "😂 Комедия"),
+    ("Документальный стиль, дикая природа, Сибирь, экспедиция", "🌿 Доку"),
+]
+
+_poster_theme_index = 0
+
+
+async def job_channel_poster(context):
+    """Автогенерация постера и публикация в оба канала."""
+    import io
+    global _poster_theme_index
+
+    theme_prompt, theme_label = POSTER_THEMES[_poster_theme_index % len(POSTER_THEMES)]
+    _poster_theme_index += 1
+
+    logger.info(f"Генерирую постер для канала: {theme_label}")
+
+    # Промпт для YandexART
+    art_prompt = (
+        f"Movie poster, cinematic, professional, high quality, dramatic lighting: {theme_prompt}. "
+        "Film poster style, bold typography space, atmospheric, award-winning cinematography"
+    )
+
+    image_bytes = await generate_yandex_art(art_prompt)
+
+    if image_bytes:
+        # Генерируем подпись через YandexGPT
+        system = "Ты — редактор Telegram-канала о кино. Отвечай ТОЛЬКО текстом поста."
+        user_msg = (
+            f"Напиши короткий вдохновляющий пост для постера в стиле «{theme_label}».\n"
+            "2-3 предложения, атмосферно, с эмодзи.\n"
+            f"Хэштеги: #кино #постер #{theme_label.split()[1].lower() if len(theme_label.split()) > 1 else 'кислород'} #кислородпродакшен"
+        )
+        caption = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+
+        bio = io.BytesIO(image_bytes)
+        bio.name = "poster.jpg"
+
+        for channel in [CHANNEL_KISLOROD, CHANNEL_ACTOR]:
+            try:
+                bio.seek(0)
+                await context.bot.send_photo(
+                    chat_id=channel,
+                    photo=bio,
+                    caption=caption,
+                )
+                logger.info(f"✅ Постер → {channel}")
+                _stats["posts_sent"] += 1
+            except Exception as e:
+                logger.error(f"Ошибка отправки постера в {channel}: {e}")
+    else:
+        logger.warning("job_channel_poster: YandexART не вернул изображение — пропускаем")
+
 # ─────────────────────────────────────────────
 # /start — ОНБОРДИНГ
 # ─────────────────────────────────────────────
@@ -1532,6 +1940,33 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting")]]),
         )
         _stats_inc_tool("monologue")
+        return
+
+    if action == "tool_poster":
+        context.user_data["awaiting"] = "poster"
+        await query.edit_message_text(
+            "🖼 Опиши свой проект для постера:",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting")]]),
+        )
+        _stats_inc_tool("poster")
+        return
+
+    if action == "tool_analyze":
+        context.user_data["awaiting"] = "analyze"
+        await query.edit_message_text(
+            "📄 Отправь текст сценария для разбора:",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting")]]),
+        )
+        _stats_inc_tool("analyze")
+        return
+
+    if action == "tool_pitch":
+        context.user_data["awaiting"] = "pitch"
+        await query.edit_message_text(
+            "🎯 Опиши идею своего проекта:",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting")]]),
+        )
+        _stats_inc_tool("pitch")
         return
 
     if action == "tool_rewrite":
@@ -2277,6 +2712,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/scene          — Написать сцену 📝\n"
         "/monologue      — Монолог для актёра 🎤\n"
         "/rewrite        — Переписать в другом стиле 🔁\n"
+        "/poster         — Генератор постера 🖼\n"
+        "/analyze        — Разбор сценария 📄\n"
+        "/pitch          — AI-Питчинг 🎯\n"
         "/help           — Справка\n"
     )
 
@@ -2291,6 +2729,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/cartoon_now      — 🎨 Мультфильм (Streaming)\n"
         "/premiere_now     — 🔥 Премьера (Streaming)\n"
         "/myfilm_now       — Из фильмографии\n"
+        "/poster_now       — 🖼 Постер в каналы (YandexART)\n"
     )
 
     footer = "\nКонтакты:\n📧 actorsashapotapov@gmail.com\n💬 @actorsashapotapov"
@@ -2390,6 +2829,35 @@ async def premiere_now_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("❌ Не удалось. Проверь RAPIDAPI_KEY.")
 
 
+
+@admin_only
+async def poster_now_command(update, context):
+    await update.message.reply_text("⏳ Генерирую постер для каналов (~60 сек)...")
+    import io
+    global _poster_theme_index
+    theme_prompt, theme_label = POSTER_THEMES[_poster_theme_index % len(POSTER_THEMES)]
+    _poster_theme_index += 1
+    art_prompt = (
+        f"Movie poster, cinematic, professional, high quality, dramatic lighting: {theme_prompt}. "
+        "Film poster style, bold typography space, atmospheric"
+    )
+    image_bytes = await generate_yandex_art(art_prompt)
+    if image_bytes:
+        system = "Ты — редактор Telegram-канала о кино. Отвечай ТОЛЬКО текстом поста."
+        user_msg = f"Напиши короткий вдохновляющий пост для постера «{theme_label}». 2-3 предложения, эмодзи, хэштеги #кино #постер #кислородпродакшен"
+        caption = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+        bio = io.BytesIO(image_bytes)
+        bio.name = "poster.jpg"
+        for channel in [CHANNEL_KISLOROD, CHANNEL_ACTOR]:
+            try:
+                bio.seek(0)
+                await context.bot.send_photo(chat_id=channel, photo=bio, caption=caption)
+            except Exception as e:
+                logger.error(f"poster_now error {channel}: {e}")
+        await update.message.reply_text("✅ Постер опубликован в оба канала!")
+    else:
+        await update.message.reply_text("❌ YandexART не ответил. Попробуй снова.")
+
 @admin_only
 async def myfilm_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Пишу пост о проекте (~15 сек)...")
@@ -2427,6 +2895,9 @@ def main():
     app.add_handler(CommandHandler("scene",       scene_command))
     app.add_handler(CommandHandler("monologue",   monologue_command))
     app.add_handler(CommandHandler("rewrite",     rewrite_command))
+    app.add_handler(CommandHandler("poster",      poster_command))
+    app.add_handler(CommandHandler("analyze",     analyze_command))
+    app.add_handler(CommandHandler("pitch",       pitch_command))
 
     # Только для администратора
     app.add_handler(CommandHandler("stats",        stats_command))
@@ -2437,6 +2908,7 @@ def main():
     app.add_handler(CommandHandler("cartoon_now",  cartoon_now_command))
     app.add_handler(CommandHandler("premiere_now", premiere_now_command))
     app.add_handler(CommandHandler("myfilm_now",   myfilm_now_command))
+    app.add_handler(CommandHandler("poster_now",   poster_now_command))
 
     # Callback и сообщения
     app.add_handler(CallbackQueryHandler(handle_callback))
@@ -2457,6 +2929,13 @@ def main():
     app.job_queue.run_daily(job_actor_filmography,  time=dtime(11,  0))  # 14:00 МСК
     app.job_queue.run_daily(job_actor_film,         time=dtime(15, 30))  # 18:30 МСК
     app.job_queue.run_daily(job_actor_evening,      time=dtime(17,  0))  # 20:00 МСК
+    # Цитата дня и кино-факт
+    app.job_queue.run_daily(job_quote_day,         time=dtime(6,   0))  # 09:00 МСК
+    app.job_queue.run_daily(job_kinofact,          time=dtime(13, 30))  # 16:30 МСК
+    # Опрос каждое воскресенье в 12:00 МСК
+    app.job_queue.run_daily(job_weekly_poll,       time=dtime(9,   0), days=(6,))  # воскр.
+    # Постер в каналы каждый день в 20:30 МСК
+    app.job_queue.run_daily(job_channel_poster,    time=dtime(17, 30))  # 20:30 МСК
 
     logger.info("=== Расписание запущено. Bot работает! ===")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
