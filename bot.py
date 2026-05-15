@@ -1715,6 +1715,120 @@ POSTER_THEMES = [
 
 _poster_theme_index = 0
 
+# ─────────────────────────────────────────────
+# СМЕШНЫЕ ПОСТЕРЫ К ОРИГИНАЛЬНЫМ ФИЛЬМАМ
+# ─────────────────────────────────────────────
+
+FUNNY_FILM_IDEAS = [
+    ("Титаник", "Джек выжил, потому что взял доску побольше. История о том, как правильная логистика спасает жизни."),
+    ("Терминатор", "Он прилетел из будущего не убивать — а починить Wi-Fi. И сделал это за 3 минуты."),
+    ("Король Лев", "Симба не вернулся в Прайд-Рок. Он открыл стартап и нанял гиен HR-менеджерами."),
+    ("Властелин колец", "Кольцо всевластия просто потерялось в ИКЕА в отделе декора. Фродо нашёл его на кассе."),
+    ("Матрица", "Нео взял синюю таблетку. Фильм длится 3 минуты."),
+    ("Звёздные войны", "Дарт Вейдер оказался просто папой с проблемами коммуникации. Семейный психолог помог бы всем."),
+    ("Один дома", "Кевин просто заказал пиццу и позвонил в полицию. Хронометраж: 8 минут."),
+    ("Назад в будущее", "Марти вернулся в прошлое и просто купил акции Apple. Дальше скучно."),
+    ("Гарри Поттер", "Гермиона решила все проблемы в первой главе. Книга — одна."),
+    ("Человек-паук", "Питер Паркер использовал паутину для уборки квартиры. Стал блогером."),
+    ("Форрест Гамп", "Форрест остановился бежать и объяснил зачем. Никто не понял."),
+    ("Джуrassic Park", "Динозавры убежали в IKEA и не смогли выбраться из зоны касс."),
+    ("Аватар", "Джейк Салли просто купил синюю краску. Дешевле и быстрее."),
+    ("Интерстеллар", "Купер вышел через другую дверь. Всё нормально."),
+    ("Бойцовский клуб", "Первое правило: рассказывать всем. Так и сделал."),
+    ("Молчание ягнят", "Ганнибал Лектер стал поваром кулинарного шоу. Рейтинги взлетели."),
+    ("Побег из Шоушенка", "Энди просто нанял хорошего адвоката. Вышел на второй год."),
+    ("Криминальное чтиво", "Все поговорили и разошлись. Кофе был хорош."),
+    ("Достать ножи", "Детектив Бланк просто прочитал завещание сразу. Конец."),
+    ("Хоббит", "Бильбо сказал «нет» и лёг спать. Приключений не случилось."),
+]
+
+_funny_poster_index = 0
+
+
+async def generate_funny_film_poster_idea() -> tuple[str, str, str]:
+    """
+    Генерирует смешную идею постера к фильму через YandexGPT.
+    Возвращает (film_title, funny_concept, art_prompt).
+    """
+    global _funny_poster_index
+    film_title, concept = FUNNY_FILM_IDEAS[_funny_poster_index % len(FUNNY_FILM_IDEAS)]
+    _funny_poster_index += 1
+
+    system = (
+        "Ты — креативный арт-директор, специализирующийся на пародийных постерах к фильмам. "
+        "Создаёшь смешные концепции и промпты для генерации изображений. "
+        "Отвечай ТОЛЬКО на английском языке и ТОЛЬКО промптом для генерации изображения."
+    )
+    user_msg = (
+        f"Фильм: «{film_title}»\n"
+        f"Юмористическая концепция: {concept}\n\n"
+        "Создай промпт для генерации смешного пародийного постера к этому фильму. "
+        "Постер должен выглядеть как настоящий кинопостер, но с абсурдным юмористическим твистом. "
+        "Промпт должен быть на английском, 1-3 предложения, описывать визуал постера. "
+        "Без пояснений — только промпт."
+    )
+    art_prompt_raw = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+    art_prompt = (
+        f"Funny parody movie poster, cinematic style, professional design, humorous twist: "
+        f"{art_prompt_raw[:300]}. Bold title typography space at top, film poster composition."
+    )
+    return film_title, concept, art_prompt
+
+
+async def generate_funny_poster_caption(film_title: str, concept: str) -> str:
+    """Генерирует смешной текст поста для пародийного постера."""
+    system = (
+        "Ты — остроумный редактор Telegram-канала о кино. "
+        "Пишешь смешные посты о кино. Отвечай ТОЛЬКО текстом поста."
+    )
+    user_msg = (
+        f"Напиши смешной пост для пародийного постера к фильму «{film_title}».\n\n"
+        f"Идея: {concept}\n\n"
+        "Формат:\n"
+        "🎬 [смешное название версии фильма]\n\n"
+        "[2-3 смешных предложения о сюжете этой альтернативной версии]\n\n"
+        "А вы бы посмотрели такую версию? 👇\n\n"
+        "#пародия #кино #альтернативноекино #кислородпродакшен"
+    )
+    return await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+
+
+async def job_funny_poster(context):
+    """Ежедневная автогенерация смешного постера к фильму в оба канала."""
+    import io
+    logger.info("Генерирую смешной постер к фильму...")
+
+    film_title, concept, art_prompt = await generate_funny_film_poster_idea()
+    image_bytes = await generate_yandex_art(art_prompt)
+
+    if image_bytes:
+        caption = await generate_funny_poster_caption(film_title, concept)
+        bio = io.BytesIO(image_bytes)
+        bio.name = "funny_poster.jpg"
+
+        for channel in [CHANNEL_KISLOROD, CHANNEL_ACTOR]:
+            try:
+                bio.seek(0)
+                await context.bot.send_photo(
+                    chat_id=channel,
+                    photo=bio,
+                    caption=caption,
+                )
+                logger.info(f"✅ Смешной постер → {channel}")
+                _stats["posts_sent"] += 1
+            except Exception as e:
+                logger.error(f"Ошибка отправки смешного постера в {channel}: {e}")
+    else:
+        # Если YandexART недоступен — отправляем только текст
+        caption = await generate_funny_poster_caption(film_title, concept)
+        for channel in [CHANNEL_KISLOROD, CHANNEL_ACTOR]:
+            try:
+                await context.bot.send_message(chat_id=channel, text=caption)
+                logger.info(f"✅ Смешной пост (без фото) → {channel}")
+                _stats["posts_sent"] += 1
+            except Exception as e:
+                logger.error(f"Ошибка отправки в {channel}: {e}")
+
 
 async def job_channel_poster(context):
     """Автогенерация постера и публикация в оба канала."""
@@ -2831,6 +2945,34 @@ async def premiere_now_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 @admin_only
+async def funny_now_command(update, context):
+    await update.message.reply_text("😂 Генерирую смешной постер к фильму (~60 сек)...")
+    import io
+    film_title, concept, art_prompt = await generate_funny_film_poster_idea()
+    image_bytes = await generate_yandex_art(art_prompt)
+    if image_bytes:
+        caption = await generate_funny_poster_caption(film_title, concept)
+        bio = io.BytesIO(image_bytes)
+        bio.name = "funny_poster.jpg"
+        for channel in [CHANNEL_KISLOROD, CHANNEL_ACTOR]:
+            try:
+                bio.seek(0)
+                await context.bot.send_photo(chat_id=channel, photo=bio, caption=caption)
+            except Exception as e:
+                logger.error(f"funny_now error {channel}: {e}")
+        await update.message.reply_text(f"✅ Смешной постер «{film_title}» опубликован в оба канала!")
+    else:
+        # Только текст если нет картинки
+        caption = await generate_funny_poster_caption(film_title, concept)
+        for channel in [CHANNEL_KISLOROD, CHANNEL_ACTOR]:
+            try:
+                await context.bot.send_message(chat_id=channel, text=caption)
+            except Exception as e:
+                logger.error(f"funny_now text error {channel}: {e}")
+        await update.message.reply_text(f"⚠️ YandexART недоступен — отправлен текст поста про «{film_title}».")
+
+
+@admin_only
 async def poster_now_command(update, context):
     await update.message.reply_text("⏳ Генерирую постер для каналов (~60 сек)...")
     import io
@@ -2909,6 +3051,7 @@ def main():
     app.add_handler(CommandHandler("premiere_now", premiere_now_command))
     app.add_handler(CommandHandler("myfilm_now",   myfilm_now_command))
     app.add_handler(CommandHandler("poster_now",   poster_now_command))
+    app.add_handler(CommandHandler("funny_now",    funny_now_command))
 
     # Callback и сообщения
     app.add_handler(CallbackQueryHandler(handle_callback))
@@ -2936,6 +3079,8 @@ def main():
     app.job_queue.run_daily(job_weekly_poll,       time=dtime(9,   0), days=(6,))  # воскр.
     # Постер в каналы каждый день в 20:30 МСК
     app.job_queue.run_daily(job_channel_poster,    time=dtime(17, 30))  # 20:30 МСК
+    # Смешной постер к фильму каждый день в 12:00 МСК
+    app.job_queue.run_daily(job_funny_poster,      time=dtime(9,   0))  # 12:00 МСК
 
     logger.info("=== Расписание запущено. Bot работает! ===")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
