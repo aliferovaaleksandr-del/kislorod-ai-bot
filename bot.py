@@ -28,7 +28,7 @@ YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 KINOPOISK_API_KEY = os.getenv("KINOPOISK_API_KEY")
-RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "29f8af604fmsh7f2433154c9fb3dp1c9f6ajsnf6ab497a500d")
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
 
 CHANNEL_KISLOROD = "@realtimeproductionn"
 CHANNEL_ACTOR = "@actorsashapotapovv"
