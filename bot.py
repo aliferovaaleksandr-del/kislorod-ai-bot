@@ -30,6 +30,7 @@ NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 KINOPOISK_API_KEY = os.getenv("KINOPOISK_API_KEY")
 RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "29f8af604fmsh7f2433154c9fb3dp1c9f6ajsnf6ab497a500d")
 TMDB_API_KEY = os.getenv("TMDB_API_KEY")
+REPLICATE_API_KEY = os.getenv("REPLICATE_API_KEY")
 
 CHANNEL_KISLOROD = "@realtimeproductionn"
 CHANNEL_ACTOR = "@actorsashapotapovv"
@@ -920,7 +921,99 @@ async def generate_streaming_premiere_post() -> tuple[str, str]:
 
 
 # ─────────────────────────────────────────────
-# YANDEX ART — ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ
+# REPLICATE FLUX.1 — ОСНОВНАЯ ГЕНЕРАЦИЯ
+# ─────────────────────────────────────────────
+
+async def generate_replicate_flux(prompt: str) -> bytes | None:
+    """Генерирует изображение через FLUX.1 на Replicate. Возвращает bytes или None."""
+    if not REPLICATE_API_KEY:
+        logger.warning("Replicate: нет REPLICATE_API_KEY")
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {REPLICATE_API_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "wait=60",
+    }
+    payload = {
+        "input": {
+            "prompt": prompt,
+            "aspect_ratio": "2:3",
+            "output_format": "jpg",
+            "output_quality": 90,
+            "num_inference_steps": 28,
+            "guidance": 3.5,
+        }
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            resp = await client.post(
+                "https://api.replicate.com/v1/models/black-forest-labs/flux-1.1-pro/predictions",
+                json=payload,
+                headers=headers,
+            )
+
+        if resp.status_code not in (200, 201):
+            logger.error(f"Replicate submit error {resp.status_code}: {resp.text[:300]}")
+            return None
+
+        data = resp.json()
+        # Если ответ сразу готов (Prefer: wait)
+        output = data.get("output")
+        if output:
+            image_url = output if isinstance(output, str) else output[0]
+            return await _download_image(image_url)
+
+        # Иначе polling
+        prediction_id = data.get("id")
+        if not prediction_id:
+            logger.error("Replicate: нет prediction_id")
+            return None
+
+        for attempt in range(30):
+            await asyncio.sleep(3)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                poll = await client.get(
+                    f"https://api.replicate.com/v1/predictions/{prediction_id}",
+                    headers={"Authorization": f"Bearer {REPLICATE_API_KEY}"},
+                )
+            poll_data = poll.json()
+            status = poll_data.get("status")
+            logger.info(f"Replicate polling [{attempt+1}]: status={status}")
+
+            if status == "succeeded":
+                output = poll_data.get("output")
+                image_url = output if isinstance(output, str) else output[0]
+                return await _download_image(image_url)
+            elif status in ("failed", "canceled"):
+                logger.error(f"Replicate failed: {poll_data.get('error')}")
+                return None
+
+        logger.error("Replicate: таймаут polling")
+        return None
+
+    except Exception as e:
+        logger.error(f"Replicate exception: {e}")
+        return None
+
+
+async def _download_image(url: str) -> bytes | None:
+    """Скачивает изображение по URL."""
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(url)
+        if resp.status_code == 200:
+            return resp.content
+        logger.error(f"Ошибка скачивания картинки: {resp.status_code}")
+        return None
+    except Exception as e:
+        logger.error(f"_download_image exception: {e}")
+        return None
+
+
+# ─────────────────────────────────────────────
+# YANDEX ART — РЕЗЕРВНАЯ ГЕНЕРАЦИЯ
 # ─────────────────────────────────────────────
 
 async def generate_yandex_art(prompt: str) -> bytes | None:
@@ -954,7 +1047,6 @@ async def generate_yandex_art(prompt: str) -> bytes | None:
             logger.error("YandexART: нет operation_id")
             return None
 
-        # Polling результата
         for attempt in range(20):
             await asyncio.sleep(3)
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -977,6 +1069,20 @@ async def generate_yandex_art(prompt: str) -> bytes | None:
     except Exception as e:
         logger.error(f"YandexART exception: {e}")
         return None
+
+
+async def generate_image(prompt: str) -> bytes | None:
+    """
+    Основная функция генерации изображений.
+    Сначала пробует FLUX.1 (Replicate), при неудаче — YandexART.
+    """
+    if REPLICATE_API_KEY:
+        logger.info("Генерация через FLUX.1 (Replicate)...")
+        result = await generate_replicate_flux(prompt)
+        if result:
+            return result
+        logger.warning("Replicate не ответил, переключаюсь на YandexART...")
+    return await generate_yandex_art(prompt)
 
 # ─────────────────────────────────────────────
 # TMDB API — НОВИНКИ ФИЛЬМОВ И СЕРИАЛОВ
@@ -1527,7 +1633,7 @@ async def _generate_poster(update, context, description: str):
     art_prompt = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
     art_prompt = f"Movie poster, cinematic, professional: {art_prompt[:300]}"
 
-    image_bytes = await generate_yandex_art(art_prompt)
+    image_bytes = await generate_image(art_prompt)
 
     try:
         await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
@@ -1933,7 +2039,7 @@ async def job_funny_poster(context):
     logger.info("Генерирую смешной постер к фильму...")
 
     film_title, concept, art_prompt = await generate_funny_film_poster_idea()
-    image_bytes = await generate_yandex_art(art_prompt)
+    image_bytes = await generate_image(art_prompt)
     caption = await generate_funny_poster_caption(film_title, concept)
 
     for channel in [CHANNEL_KISLOROD, CHANNEL_ACTOR]:
@@ -1968,7 +2074,7 @@ async def job_channel_poster(context):
         "Film poster style, bold typography space, atmospheric, award-winning cinematography"
     )
 
-    image_bytes = await generate_yandex_art(art_prompt)
+    image_bytes = await generate_image(art_prompt)
 
     if image_bytes:
         # Генерируем подпись через YandexGPT
@@ -3070,7 +3176,7 @@ async def premiere_now_command(update: Update, context: ContextTypes.DEFAULT_TYP
 async def funny_now_command(update, context):
     await update.message.reply_text("😂 Генерирую смешной постер к фильму (~60 сек)...")
     film_title, concept, art_prompt = await generate_funny_film_poster_idea()
-    image_bytes = await generate_yandex_art(art_prompt)
+    image_bytes = await generate_image(art_prompt)
     caption = await generate_funny_poster_caption(film_title, concept)
     results = []
     for channel in [CHANNEL_KISLOROD, CHANNEL_ACTOR]:
@@ -3103,7 +3209,7 @@ async def poster_now_command(update, context):
         f"Movie poster, cinematic, professional, high quality, dramatic lighting: {theme_prompt}. "
         "Film poster style, bold typography space, atmospheric"
     )
-    image_bytes = await generate_yandex_art(art_prompt)
+    image_bytes = await generate_image(art_prompt)
     if image_bytes:
         system = "Ты — редактор Telegram-канала о кино. Отвечай ТОЛЬКО текстом поста."
         user_msg = f"Напиши короткий вдохновляющий пост для постера «{theme_label}». 2-3 предложения, эмодзи, хэштеги #кино #постер #кислородпродакшен"
@@ -3143,6 +3249,7 @@ def main():
     logger.info(f"NEWS_API_KEY:      {'✅' if NEWS_API_KEY      else '❌ НЕ ЗАДАН'}")
     logger.info(f"RAPIDAPI_KEY:      {'✅' if RAPIDAPI_KEY      else '❌ НЕ ЗАДАН'}")
     logger.info(f"TMDB_API_KEY:      {'✅' if TMDB_API_KEY       else '❌ НЕ ЗАДАН'}")
+    logger.info(f"REPLICATE_API_KEY: {'✅' if REPLICATE_API_KEY  else '❌ НЕ ЗАДАН (будет YandexART)'}")
     logger.info(f"ADMIN_IDS:         {ADMIN_IDS}")
 
     app = Application.builder().token(BOT_TOKEN).build()
