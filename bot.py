@@ -4,6 +4,7 @@ import logging
 import random
 import json
 import httpx
+import functools
 from datetime import time as dtime
 from telegram import (
     Update,
@@ -63,6 +64,7 @@ def _stats_inc_role(role_key: str):
 # ─────────────────────────────────────────────
 
 def admin_only(func):
+    @functools.wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         if user_id not in ADMIN_IDS:
@@ -70,7 +72,6 @@ def admin_only(func):
             logger.warning(f"Попытка доступа к admin-команде от user_id={user_id}")
             return
         return await func(update, context)
-    wrapper.__name__ = func.__name__
     return wrapper
 
 
