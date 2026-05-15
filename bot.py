@@ -2,6 +2,7 @@ import os
 import asyncio
 import logging
 import random
+import json
 import httpx
 from datetime import time as dtime
 from telegram import (
@@ -32,21 +33,40 @@ CHANNEL_ACTOR = "@actorsashapotapovv"
 
 WEBAPP_URL = "https://aliferovaaleksandr-del.github.io/kislorod-ai-bot/menu.html"
 
-# ─────────────────────────────────────────────
-# ЗАЩИТА: только эти user_id могут использовать
-# команды постинга и служебные команды
-# ─────────────────────────────────────────────
 ADMIN_IDS = {8780881836}
 
+# ─────────────────────────────────────────────
+# ГЛОБАЛЬНАЯ СТАТИСТИКА
+# ─────────────────────────────────────────────
+# Хранится в памяти. При перезапуске сбрасывается.
+# Для персистентности — подключи БД или сохраняй в файл.
+_stats = {
+    "total_users": set(),       # уникальные user_id
+    "total_messages": 0,
+    "roles_chosen": {},         # role_key -> count
+    "tools_used": {},           # tool_name -> count
+    "saves_total": 0,
+    "posts_sent": 0,
+}
+
+
+def _stats_inc_tool(tool_name: str):
+    _stats["tools_used"][tool_name] = _stats["tools_used"].get(tool_name, 0) + 1
+
+
+def _stats_inc_role(role_key: str):
+    _stats["roles_chosen"][role_key] = _stats["roles_chosen"].get(role_key, 0) + 1
+
+
+# ─────────────────────────────────────────────
+# ДЕКОРАТОР: только для администраторов
+# ─────────────────────────────────────────────
 
 def admin_only(func):
-    """Декоратор: ограничивает команду только для администраторов."""
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         if user_id not in ADMIN_IDS:
-            await update.message.reply_text(
-                "⛔ У вас нет доступа к этой команде."
-            )
+            await update.message.reply_text("⛔ У вас нет доступа к этой команде.")
             logger.warning(f"Попытка доступа к admin-команде от user_id={user_id}")
             return
         return await func(update, context)
@@ -62,32 +82,68 @@ logger = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────
-# МЕНЮ
+# ОНБОРДИНГ
 # ─────────────────────────────────────────────
 
-def main_menu_keyboard():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🎭 Актёр", callback_data="role_actor"),
-            InlineKeyboardButton("🎬 Режиссёр", callback_data="role_director"),
-            InlineKeyboardButton("✍️ Сценарист", callback_data="role_screenwriter"),
+ONBOARDING_STEPS = [
+    {
+        "text": (
+            "🎬 Добро пожаловать в КИСЛОРОД ПРОДАКШЕН AI!\n\n"
+            "Я — твой творческий ассистент для кино, анимации и контента.\n\n"
+            "За 3 шага покажу, что умею.\n\n"
+            "👇 Шаг 1 из 3: Выбери свою роль в кино:"
+        ),
+        "buttons": [
+            [InlineKeyboardButton("🎭 Я — Актёр", callback_data="onboard_actor"),
+             InlineKeyboardButton("🎬 Я — Режиссёр", callback_data="onboard_director")],
+            [InlineKeyboardButton("✍️ Я — Сценарист", callback_data="onboard_screenwriter"),
+             InlineKeyboardButton("💼 Я — Продюсер", callback_data="onboard_producer")],
+            [InlineKeyboardButton("🤝 Я — Заказчик", callback_data="onboard_client"),
+             InlineKeyboardButton("🌐 Просто смотрю", callback_data="onboard_general")],
         ],
-        [
-            InlineKeyboardButton("💼 Продюсер", callback_data="role_producer"),
-            InlineKeyboardButton("🤝 Заказчик", callback_data="role_client"),
-            InlineKeyboardButton("🌐 Общий", callback_data="role_general"),
-        ],
-    ])
+    },
+]
+
+ONBOARDING_STEP2 = {
+    "text": (
+        "✅ Отлично! Роль выбрана.\n\n"
+        "📋 Шаг 2 из 3: Инструменты\n\n"
+        "У меня есть мощные творческие инструменты:\n"
+        "🎬 /storyboard — Раскадровка сцены\n"
+        "🎭 /character — Карточка персонажа\n"
+        "📝 /scene — Написать сцену в сценарном формате\n"
+        "🎤 /monologue — Монолог для актёра\n"
+        "🔁 /rewrite — Переписать текст в другом жанре\n"
+        "💾 /saves — Твои сохранённые работы\n\n"
+        "👇 Шаг 3 из 3: Как ты хочешь начать?"
+    ),
+    "buttons": [
+        [InlineKeyboardButton("💬 Просто поговорить", callback_data="onboard_finish_chat"),
+         InlineKeyboardButton("🛠 Попробовать инструмент", callback_data="onboard_finish_tool")],
+    ],
+}
+
+ONBOARDING_STEP3_CHAT = (
+    "🚀 Отлично! Я готов.\n\n"
+    "Напиши мне что угодно — я отвечу как твой персональный AI-наставник.\n\n"
+    "Или выбери подсказку ниже 👇"
+)
+
+ONBOARDING_STEP3_TOOL = (
+    "🛠 Выбери инструмент:\n\n"
+    "/storyboard — создать раскадровку\n"
+    "/character — создать карточку персонажа\n"
+    "/scene — написать сцену\n"
+    "/monologue — написать монолог\n"
+    "/rewrite — переписать в другом стиле\n\n"
+    "Или нажми 📋 Меню, чтобы сменить роль."
+)
 
 
-def chat_keyboard():
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
-        InlineKeyboardButton("🗑 Очистить чат", callback_data="clear_chat"),
-    ]])
+# ─────────────────────────────────────────────
+# МЕНЮ ПОДСКАЗОК
+# ─────────────────────────────────────────────
 
-
-# Подсказки-кнопки для каждой роли
 ROLE_HINTS = {
     "actor": [
         ("🎭 Подготовь меня к роли", "hint_actor_1"),
@@ -127,7 +183,6 @@ ROLE_HINTS = {
     ],
 }
 
-# Тексты подсказок — что отправить в GPT при нажатии кнопки
 HINT_TEXTS = {
     "hint_actor_1": "Помоги мне подготовиться к новой роли. Спроси меня о персонаже и дай план подготовки.",
     "hint_actor_2": "Помоги примерить образ персонажа: опиши внешность, костюм, грим и манеру поведения.",
@@ -157,21 +212,41 @@ HINT_TEXTS = {
 
 
 def hints_keyboard(role_key: str) -> InlineKeyboardMarkup:
-    """Возвращает клавиатуру с подсказками для конкретной роли + кнопки управления."""
     hints = ROLE_HINTS.get(role_key, [])
     rows = []
-    # По 2 подсказки в ряд
     for i in range(0, len(hints), 2):
         row = [InlineKeyboardButton(hints[i][0], callback_data=hints[i][1])]
         if i + 1 < len(hints):
             row.append(InlineKeyboardButton(hints[i + 1][0], callback_data=hints[i + 1][1]))
         rows.append(row)
-    # Кнопки управления внизу
+    # Строка управления
+    rows.append([
+        InlineKeyboardButton("🛠 Инструменты", callback_data="show_tools"),
+        InlineKeyboardButton("💾 Сохранённые", callback_data="show_saves"),
+    ])
     rows.append([
         InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
         InlineKeyboardButton("🗑 Очистить чат", callback_data="clear_chat"),
     ])
     return InlineKeyboardMarkup(rows)
+
+
+def tools_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🎬 Раскадровка", callback_data="tool_storyboard"),
+            InlineKeyboardButton("🎭 Персонаж", callback_data="tool_character"),
+        ],
+        [
+            InlineKeyboardButton("📝 Сцена", callback_data="tool_scene"),
+            InlineKeyboardButton("🎤 Монолог", callback_data="tool_monologue"),
+        ],
+        [
+            InlineKeyboardButton("🔁 Переписать стиль", callback_data="tool_rewrite"),
+            InlineKeyboardButton("💾 Мои сохранения", callback_data="show_saves"),
+        ],
+        [InlineKeyboardButton("◀️ Назад", callback_data="back_to_hints")],
+    ])
 
 
 def webapp_keyboard():
@@ -386,7 +461,7 @@ async def fetch_news(query: str, language: str = "ru", page_size: int = 5) -> tu
 
 
 # ─────────────────────────────────────────────
-# YANDEX GPT — с retry и backoff
+# YANDEX GPT
 # ─────────────────────────────────────────────
 
 async def ask_yandex_gpt(system_prompt: str, conversation: list, retries: int = 3) -> str:
@@ -421,7 +496,6 @@ async def ask_yandex_gpt(system_prompt: str, conversation: list, retries: int = 
             if response.status_code == 200:
                 text = data["result"]["alternatives"][0]["message"]["text"].strip()
                 if not text:
-                    logger.warning("Yandex GPT вернул пустой ответ")
                     return "Не смог сформулировать ответ. Попробуй переформулировать вопрос."
                 return text
 
@@ -458,12 +532,11 @@ async def ask_yandex_gpt(system_prompt: str, conversation: list, retries: int = 
             logger.error(f"YandexGPT exception {type(e).__name__}: {e}")
             return "Не удалось получить ответ. Попробуй снова."
 
-    logger.error(f"Yandex GPT: все {retries} попытки провалились. Последняя ошибка: {last_error}")
     return f"⚠️ {last_error} Попробуй чуть позже."
 
 
 # ─────────────────────────────────────────────
-# ВСПОМОГАТЕЛЬНАЯ: продление индикатора "печатает"
+# TYPING INDICATOR
 # ─────────────────────────────────────────────
 
 async def keep_typing(bot, chat_id: int, stop_event: asyncio.Event):
@@ -477,6 +550,48 @@ async def keep_typing(bot, chat_id: int, stop_event: asyncio.Event):
 
 
 # ─────────────────────────────────────────────
+# СОХРАНЕНИЕ РАБОТ
+# ─────────────────────────────────────────────
+
+SAVE_TYPE_LABELS = {
+    "storyboard": "🎬 Раскадровка",
+    "character":  "🎭 Персонаж",
+    "scene":      "📝 Сцена",
+    "monologue":  "🎤 Монолог",
+    "rewrite":    "🔁 Перезапись",
+    "chat":       "💬 Ответ",
+}
+
+
+def _get_saves(context: ContextTypes.DEFAULT_TYPE) -> list:
+    return context.user_data.get("saves", [])
+
+
+def _add_save(context: ContextTypes.DEFAULT_TYPE, save_type: str, title: str, content: str):
+    saves = context.user_data.get("saves", [])
+    # Максимум 20 сохранений на пользователя
+    if len(saves) >= 20:
+        saves.pop(0)
+    saves.append({"type": save_type, "title": title, "content": content})
+    context.user_data["saves"] = saves
+    _stats["saves_total"] += 1
+
+
+def save_keyboard(save_type: str, title: str) -> InlineKeyboardMarkup:
+    """Кнопка сохранения, которая добавляется под генерируемым контентом."""
+    import urllib.parse
+    # Передаём тип и укороченный заголовок через callback_data
+    short_title = title[:30]
+    return InlineKeyboardButton(
+        "💾 Сохранить", callback_data=f"save|{save_type}|{short_title}"
+    )
+
+
+def make_save_row(save_type: str, title: str) -> list:
+    return [save_keyboard(save_type, title)]
+
+
+# ─────────────────────────────────────────────
 # ГЕНЕРАЦИЯ ПОСТОВ — НОВОСТИ
 # ─────────────────────────────────────────────
 
@@ -485,7 +600,6 @@ async def generate_kislorod_post() -> tuple:
     query = KISLOROD_QUERIES[_kislorod_query_index % len(KISLOROD_QUERIES)]
     _kislorod_query_index += 1
 
-    logger.info(f"Кислород: новости по запросу '{query}'")
     news, image_url = await fetch_news(query, language="ru")
     if not news:
         news, image_url = await fetch_news("cinema film production", language="en")
@@ -494,24 +608,16 @@ async def generate_kislorod_post() -> tuple:
         system = (
             "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН. "
             "Студия создаёт мультфильмы, клипы, сериалы и рекламу с помощью AI. "
-            "Пиши интересно, живо, с уважением к читателю. "
             "Отвечай ТОЛЬКО текстом поста — без пояснений, без markdown, без кавычек."
         )
         user_msg = (
             f"Свежие новости из мира кино и продакшена:\n\n{news}\n\n"
             "На основе этих новостей напиши один пост для Telegram-канала.\n"
-            "Требования:\n"
-            "— 150–250 слов\n"
-            "— Живой, увлекательный стиль\n"
-            "— 1–2 тематических эмодзи в начале\n"
-            "— Хэштеги в конце: #кино #кислородпродакшен #продакшен #актёрскоемастерство\n"
-            "— Только текст поста на русском языке, без заголовка"
+            "— 150–250 слов\n— Живой стиль\n— 1–2 эмодзи в начале\n"
+            "— Хэштеги: #кино #кислородпродакшен #продакшен"
         )
     else:
-        system = (
-            "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН — творческой AI-студии. "
-            "Отвечай ТОЛЬКО текстом поста."
-        )
+        system = "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН. Отвечай ТОЛЬКО текстом поста."
         user_msg = (
             "Напиши пост для Telegram-канала о трендах в кино и продакшене. "
             "150–250 слов, 1–2 эмодзи, хэштеги: #кино #кислородпродакшен #продакшен"
@@ -526,38 +632,27 @@ async def generate_actor_post() -> tuple:
     query = ACTOR_QUERIES[_actor_query_index % len(ACTOR_QUERIES)]
     _actor_query_index += 1
 
-    logger.info(f"Актёр: новости по запросу '{query}'")
     news, image_url = await fetch_news(query, language="ru")
     if not news:
         news, image_url = await fetch_news("actor film AI casting technology", language="en")
 
     if news:
         system = (
-            "Ты помогаешь актёру Александру Потапову (1986 г.р.) вести его личный Telegram-канал. "
-            "Александр — российский киноактёр и основатель студии КИСЛОРОД ПРОДАКШЕН. "
-            "Пиши от его имени: искренне, по-человечески, с личным взглядом на профессию. "
+            "Ты помогаешь актёру Александру Потапову вести его личный Telegram-канал. "
             "Отвечай ТОЛЬКО текстом поста — без пояснений, без markdown."
         )
         user_msg = (
-            f"Свежие новости из мира кино и актёрства:\n\n{news}\n\n"
-            "Напиши личный пост от имени Александра Потапова.\n"
-            "Требования:\n"
-            "— 120–200 слов\n"
-            "— От первого лица, искренний личный тон\n"
-            "— Своё мнение или тема из профессиональной жизни\n"
-            "— 1–2 эмодзи\n"
-            "— Хэштеги в конце: #актёр #кино #александрпотапов #актёрскоемастерство\n"
-            "— Только текст поста на русском языке"
+            f"Свежие новости:\n\n{news}\n\n"
+            "Напиши личный пост от имени Александра. "
+            "120–200 слов, от первого лица, 1–2 эмодзи. "
+            "Хэштеги: #актёр #кино #александрпотапов"
         )
     else:
-        system = (
-            "Ты помогаешь актёру Александру Потапову вести его личный Telegram-канал. "
-            "Отвечай ТОЛЬКО текстом поста."
-        )
+        system = "Ты помогаешь актёру Александру Потапову. Отвечай ТОЛЬКО текстом поста."
         user_msg = (
-            "Напиши личный пост от имени актёра Александра Потапова об актёрском пути. "
+            "Напиши личный пост об актёрском пути. "
             "120–200 слов, от первого лица, 1–2 эмодзи. "
-            "Хэштеги: #актёр #кино #александрпотапов #актёрскоемастерство"
+            "Хэштеги: #актёр #кино #александрпотапов"
         )
 
     text = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
@@ -579,13 +674,13 @@ FILMOGRAPHY = [
     {"title": "Ваш Ваня", "year": "2020", "role": "", "type": "сериал", "note": "рейтинг 7.1"},
     {"title": "Фемида видит", "year": "2019", "role": "оперативник", "type": "сериал", "note": "рейтинг 6.7"},
     {"title": "Короче", "year": "2019–2021", "role": "", "type": "сериал", "note": "комедия, рейтинг 7.6"},
-    {"title": "Полярный", "year": "2019", "role": "бармен", "type": "сериал", "note": "рейтинг 8.2, продолжается"},
+    {"title": "Полярный", "year": "2019", "role": "бармен", "type": "сериал", "note": "рейтинг 8.2"},
     {"title": "Трудные подростки", "year": "2019–2024", "role": "Гарик", "type": "сериал", "note": "рейтинг 8.2"},
     {"title": "Ключи", "year": "2018", "role": "", "type": "фильм", "note": ""},
-    {"title": "Полицейский с Рублёвки. Мы тебя найдём", "year": "2018", "role": "Степа", "type": "сериал", "note": "ТНТ, рейтинг 7.5"},
-    {"title": "Оптимисты", "year": "2017", "role": "хулиган", "type": "сериал", "note": "Россия-1, рейтинг 7.9"},
-    {"title": "Четвертая смена", "year": "2017", "role": "сотрудник аварийной службы", "type": "сериал", "note": "НТВ, рейтинг 7.4"},
-    {"title": "Полицейский с Рублёвки в Бескудниково", "year": "2017", "role": "гопник", "type": "сериал", "note": "рейтинг 7.9"},
+    {"title": "Полицейский с Рублёвки. Мы тебя найдём", "year": "2018", "role": "Степа", "type": "сериал", "note": "ТНТ"},
+    {"title": "Оптимисты", "year": "2017", "role": "хулиган", "type": "сериал", "note": "Россия-1"},
+    {"title": "Четвертая смена", "year": "2017", "role": "сотрудник аварийной службы", "type": "сериал", "note": "НТВ"},
+    {"title": "Полицейский с Рублёвки в Бескудниково", "year": "2017", "role": "гопник", "type": "сериал", "note": ""},
     {"title": "Охота на дьявола", "year": "2017", "role": "", "type": "сериал", "note": "рейтинг 7.8"},
 ]
 
@@ -600,30 +695,16 @@ async def generate_filmography_post() -> tuple:
     role_str = f", роль: {project['role']}" if project["role"] else ""
     note_str = f" ({project['note']})" if project["note"] else ""
 
-    logger.info(f"Фильмография: пост о «{project['title']}» ({project['year']})")
-
     system = (
         "Ты помогаешь актёру Александру Потапову (19 декабря 1986 г.р.) вести его личный Telegram-канал. "
-        "Александр — российский киноактёр, сыгравший в 18 проектах, и основатель студии КИСЛОРОД ПРОДАКШЕН. "
-        "Пиши от его имени: искренне, по-человечески, с личным взглядом изнутри профессии. "
         "Отвечай ТОЛЬКО текстом поста — без пояснений, без markdown."
     )
     user_msg = (
-        f"Напиши личный пост от имени Александра Потапова о его работе в проекте:\n\n"
-        f"Название: «{project['title']}»\n"
-        f"Год: {project['year']}\n"
-        f"Тип: {project['type']}{note_str}\n"
-        f"Роль{role_str}\n\n"
-        "Требования:\n"
-        "— 120–180 слов\n"
-        "— От первого лица, живо и искренне\n"
-        "— Расскажи что-то личное об этом проекте: что запомнилось, чему научил, "
-        "какие эмоции были на съёмках, что было сложно или интересно\n"
-        "— Если роль указана — упомяни её\n"
-        "— 1–2 эмодзи\n"
-        "— Хэштеги в конце: #актёр #александрпотапов #кино "
-        f"#{project['title'].replace(' ', '').replace('–', '').replace('.', '').lower()}\n"
-        "— Только текст поста на русском языке"
+        f"Напиши личный пост от имени Александра о проекте:\n\n"
+        f"Название: «{project['title']}»\nГод: {project['year']}\n"
+        f"Тип: {project['type']}{note_str}\nРоль{role_str}\n\n"
+        "— 120–180 слов, от первого лица\n— 1–2 эмодзи\n"
+        "— Хэштеги: #актёр #александрпотапов #кино"
     )
 
     text = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
@@ -631,85 +712,57 @@ async def generate_filmography_post() -> tuple:
 
 
 # ─────────────────────────────────────────────
-# КИНОПОИСК — вспомогательные функции
+# КИНОПОИСК
 # ─────────────────────────────────────────────
 
 KINOPOISK_BASE = "https://kinopoiskapiunofficial.tech"
 
 
 def _kp_headers() -> dict:
-    return {
-        "X-API-KEY": KINOPOISK_API_KEY or "",
-        "Content-Type": "application/json",
-    }
+    return {"X-API-KEY": KINOPOISK_API_KEY or "", "Content-Type": "application/json"}
 
 
-async def _kp_get_film_detail(client: httpx.AsyncClient, film_id: int) -> dict:
+async def _kp_get_film_detail(client, film_id):
     r = await client.get(f"{KINOPOISK_BASE}/api/v2.2/films/{film_id}", headers=_kp_headers())
     return r.json() if r.status_code == 200 else {}
 
 
-async def _kp_get_videos(client: httpx.AsyncClient, film_id: int) -> str:
+async def _kp_get_videos(client, film_id):
     rv = await client.get(f"{KINOPOISK_BASE}/api/v2.2/films/{film_id}/videos", headers=_kp_headers())
     if rv.status_code != 200:
         return ""
     videos = rv.json().get("items", [])
     for v in videos:
-        url = v.get("url", "")
-        site = v.get("site", "")
-        name = (v.get("name") or "").lower()
-        if site == "YOUTUBE" and "трейлер" in name:
-            return url
+        if v.get("site") == "YOUTUBE" and "трейлер" in (v.get("name") or "").lower():
+            return v.get("url", "")
     for v in videos:
         if v.get("site") == "YOUTUBE":
             return v.get("url", "")
     return videos[0].get("url", "") if videos else ""
 
 
-async def _kp_fetch_top_films(client: httpx.AsyncClient, top_type: str, page: int) -> list:
+async def _kp_fetch_top_films(client, top_type, page):
     r = await client.get(
         f"{KINOPOISK_BASE}/api/v2.2/films/top",
-        headers=_kp_headers(),
-        params={"type": top_type, "page": page},
+        headers=_kp_headers(), params={"type": top_type, "page": page},
     )
-    if r.status_code == 402:
-        logger.error("Kinopoisk: лимит запросов (402)")
-        return []
-    if r.status_code != 200:
-        logger.error(f"Kinopoisk top {r.status_code}: {r.text[:200]}")
+    if r.status_code not in (200,):
         return []
     return r.json().get("films", [])
 
 
-async def _kp_fetch_films_by_genre(
-    client: httpx.AsyncClient,
-    genre_id: int,
-    order: str = "RATING",
-    film_type: str = "FILM",
-    page: int = 1,
-) -> list:
+async def _kp_fetch_films_by_genre(client, genre_id, order="RATING", film_type="FILM", page=1):
     r = await client.get(
-        f"{KINOPOISK_BASE}/api/v2.2/films",
-        headers=_kp_headers(),
-        params={
-            "genres": genre_id,
-            "order": order,
-            "type": film_type,
-            "ratingFrom": 6,
-            "ratingTo": 10,
-            "page": page,
-        },
+        f"{KINOPOISK_BASE}/api/v2.2/films", headers=_kp_headers(),
+        params={"genres": genre_id, "order": order, "type": film_type,
+                "ratingFrom": 6, "ratingTo": 10, "page": page},
     )
-    if r.status_code == 402:
-        logger.error("Kinopoisk: лимит запросов (402)")
-        return []
     if r.status_code != 200:
-        logger.error(f"Kinopoisk films {r.status_code}: {r.text[:200]}")
         return []
     return r.json().get("items", [])
 
 
-def _extract_film_base(film: dict) -> dict:
+def _extract_film_base(film):
     film_id = film.get("filmId") or film.get("kinopoiskId")
     title = film.get("nameRu") or film.get("nameEn") or "Без названия"
     year = film.get("year", "")
@@ -718,39 +771,33 @@ def _extract_film_base(film: dict) -> dict:
     return {"id": film_id, "title": title, "year": year, "poster": poster_url, "genres": genres}
 
 
-# ─────────────────────────────────────────────
-# КИНОПОИСК — трейлер, сериал, новинка, мультфильм, постер
-# ─────────────────────────────────────────────
-
 async def fetch_kinopoisk_trailer() -> dict:
     if not KINOPOISK_API_KEY:
         return {}
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            top_type = random.choice(["TOP_250_BEST_FILMS", "TOP_100_POPULAR_FILMS"])
-            page = random.randint(1, 5)
-            films = await _kp_fetch_top_films(client, top_type, page)
-            if not films:
-                return {}
+            films = await _kp_fetch_top_films(
+                client, random.choice(["TOP_250_BEST_FILMS", "TOP_100_POPULAR_FILMS"]),
+                random.randint(1, 5)
+            )
             random.shuffle(films)
             for film in films[:10]:
                 base = _extract_film_base(film)
                 if not base["id"]:
                     continue
                 detail = await _kp_get_film_detail(client, base["id"])
-                description = detail.get("description") or detail.get("shortDescription") or ""
-                poster_url = detail.get("posterUrl") or base["poster"]
                 trailer_url = await _kp_get_videos(client, base["id"])
                 if not trailer_url:
                     continue
                 return {
-                    "title": base["title"], "description": description,
-                    "poster_url": poster_url, "trailer_url": trailer_url,
-                    "year": base["year"], "genres": base["genres"],
+                    "title": base["title"],
+                    "description": detail.get("description") or detail.get("shortDescription") or "",
+                    "poster_url": detail.get("posterUrl") or base["poster"],
+                    "trailer_url": trailer_url, "year": base["year"], "genres": base["genres"],
                 }
         return {}
     except Exception as e:
-        logger.error(f"Kinopoisk trailer exception: {e}")
+        logger.error(f"Kinopoisk trailer: {e}")
         return {}
 
 
@@ -759,21 +806,17 @@ async def fetch_kinopoisk_series() -> dict:
         return {}
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            page = random.randint(1, 5)
-            series_type = random.choice(["TV_SERIES", "MINI_SERIES"])
-            items = await _kp_fetch_films_by_genre(client, genre_id=19, order="RATING", film_type=series_type, page=page)
-            if len(items) < 3:
-                items = await _kp_fetch_films_by_genre(client, genre_id=14, order="RATING", film_type=series_type, page=1)
-            if not items:
-                return {}
+            items = await _kp_fetch_films_by_genre(
+                client, genre_id=19, order="RATING",
+                film_type=random.choice(["TV_SERIES", "MINI_SERIES"]),
+                page=random.randint(1, 5)
+            )
             random.shuffle(items)
             for item in items[:8]:
                 base = _extract_film_base(item)
                 if not base["id"]:
                     continue
                 detail = await _kp_get_film_detail(client, base["id"])
-                if not detail:
-                    continue
                 description = detail.get("description") or detail.get("shortDescription") or ""
                 if not description:
                     continue
@@ -781,23 +824,23 @@ async def fetch_kinopoisk_series() -> dict:
                     "title": base["title"], "description": description,
                     "poster_url": detail.get("posterUrl") or base["poster"],
                     "year": base["year"], "genres": base["genres"],
-                    "rating": detail.get("ratingKinopoisk") or detail.get("ratingImdb") or "",
-                    "seasons": detail.get("seasonsCount", ""), "is_series": True,
+                    "rating": detail.get("ratingKinopoisk") or "",
+                    "seasons": detail.get("seasonsCount", ""),
                 }
         return {}
     except Exception as e:
-        logger.error(f"Kinopoisk series exception: {e}")
+        logger.error(f"Kinopoisk series: {e}")
         return {}
 
 
 async def fetch_kinopoisk_new_film() -> dict:
+    import datetime
     if not KINOPOISK_API_KEY:
         return {}
-    import datetime
     current_year = datetime.datetime.now().year
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            films = await _kp_fetch_top_films(client, "TOP_AWAIT_FILMS", page=1)
+            films = await _kp_fetch_top_films(client, "TOP_AWAIT_FILMS", 1)
             if not films:
                 r = await client.get(
                     f"{KINOPOISK_BASE}/api/v2.2/films", headers=_kp_headers(),
@@ -807,8 +850,6 @@ async def fetch_kinopoisk_new_film() -> dict:
                 )
                 if r.status_code == 200:
                     films = r.json().get("items", [])
-            if not films:
-                return {}
             random.shuffle(films)
             for film in films[:10]:
                 base = _extract_film_base(film)
@@ -823,11 +864,11 @@ async def fetch_kinopoisk_new_film() -> dict:
                     "title": base["title"], "description": description,
                     "poster_url": detail.get("posterUrl") or base["poster"],
                     "trailer_url": trailer_url, "year": base["year"], "genres": base["genres"],
-                    "rating": detail.get("ratingKinopoisk") or detail.get("ratingImdb") or "",
+                    "rating": detail.get("ratingKinopoisk") or "",
                 }
         return {}
     except Exception as e:
-        logger.error(f"Kinopoisk new film exception: {e}")
+        logger.error(f"Kinopoisk new film: {e}")
         return {}
 
 
@@ -836,13 +877,11 @@ async def fetch_kinopoisk_cartoon() -> dict:
         return {}
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            page = random.randint(1, 5)
-            film_type = random.choice(["FILM", "TV_SERIES", "MINI_SERIES"])
-            items = await _kp_fetch_films_by_genre(client, genre_id=15, order="RATING", film_type=film_type, page=page)
-            if not items:
-                items = await _kp_fetch_films_by_genre(client, genre_id=15, order="NUM_VOTE", film_type="FILM", page=1)
-            if not items:
-                return {}
+            items = await _kp_fetch_films_by_genre(
+                client, genre_id=15, order="RATING",
+                film_type=random.choice(["FILM", "TV_SERIES"]),
+                page=random.randint(1, 5)
+            )
             random.shuffle(items)
             for item in items[:10]:
                 base = _extract_film_base(item)
@@ -857,11 +896,11 @@ async def fetch_kinopoisk_cartoon() -> dict:
                     "title": base["title"], "description": description,
                     "poster_url": detail.get("posterUrl") or base["poster"],
                     "trailer_url": trailer_url, "year": base["year"], "genres": base["genres"],
-                    "rating": detail.get("ratingKinopoisk") or detail.get("ratingImdb") or "",
+                    "rating": detail.get("ratingKinopoisk") or "",
                 }
         return {}
     except Exception as e:
-        logger.error(f"Kinopoisk cartoon exception: {e}")
+        logger.error(f"Kinopoisk cartoon: {e}")
         return {}
 
 
@@ -870,11 +909,10 @@ async def fetch_kinopoisk_poster() -> dict:
         return {}
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            top_type = random.choice(["TOP_250_BEST_FILMS", "TOP_100_POPULAR_FILMS"])
-            page = random.randint(1, 10)
-            films = await _kp_fetch_top_films(client, top_type, page)
-            if not films:
-                return {}
+            films = await _kp_fetch_top_films(
+                client, random.choice(["TOP_250_BEST_FILMS", "TOP_100_POPULAR_FILMS"]),
+                random.randint(1, 10)
+            )
             random.shuffle(films)
             for film in films[:15]:
                 base = _extract_film_base(film)
@@ -882,19 +920,17 @@ async def fetch_kinopoisk_poster() -> dict:
                     continue
                 detail = await _kp_get_film_detail(client, base["id"])
                 poster_url = detail.get("posterUrl") or base["poster"]
-                if not poster_url or "preview" in poster_url.lower():
-                    poster_url = detail.get("posterUrl") or ""
                 if not poster_url:
                     continue
                 return {
                     "title": base["title"],
                     "description": detail.get("description") or detail.get("shortDescription") or "",
                     "poster_url": poster_url, "year": base["year"], "genres": base["genres"],
-                    "rating": detail.get("ratingKinopoisk") or detail.get("ratingImdb") or "",
+                    "rating": detail.get("ratingKinopoisk") or "",
                 }
         return {}
     except Exception as e:
-        logger.error(f"Kinopoisk poster exception: {e}")
+        logger.error(f"Kinopoisk poster: {e}")
         return {}
 
 
@@ -908,16 +944,14 @@ async def generate_trailer_post() -> tuple:
         return "", ""
     system = (
         "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН. "
-        "Пишешь анонс трейлера — интригующе, с любовью к кино. "
-        "Отвечай ТОЛЬКО текстом поста — без пояснений, без markdown."
+        "Отвечай ТОЛЬКО текстом поста."
     )
     user_msg = (
         f"Фильм: «{movie['title']}» ({movie['year']})\nЖанры: {movie['genres']}\n"
         f"Описание: {movie['description']}\n\n"
-        "Напиши анонс-пост для Telegram-канала.\n"
-        "— 80–120 слов\n— Интригующий стиль\n— 1–2 эмодзи в начале\n"
-        f"— В конце отдельной строкой: ▶️ Смотреть трейлер: {movie['trailer_url']}\n"
-        "— Хэштеги: #трейлер #кино #кислородпродакшен\n— Только текст на русском"
+        "— 80–120 слов\n— 1–2 эмодзи\n"
+        f"— В конце: ▶️ Смотреть трейлер: {movie['trailer_url']}\n"
+        "— Хэштеги: #трейлер #кино #кислородпродакшен"
     )
     text = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
     return text, movie["poster_url"]
@@ -928,17 +962,12 @@ async def generate_series_post() -> tuple:
     if not series:
         return "", ""
     rating_str = f"⭐ {series['rating']}" if series.get("rating") else ""
-    seasons_str = f"• {series['seasons']} сезонов" if series.get("seasons") else ""
-    system = (
-        "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН. "
-        "Пишешь рекомендательный пост о сериале — увлекательно и по делу. "
-        "Отвечай ТОЛЬКО текстом поста — без пояснений, без markdown."
-    )
+    system = "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН. Отвечай ТОЛЬКО текстом поста."
     user_msg = (
-        f"Сериал: «{series['title']}» ({series['year']}) {rating_str} {seasons_str}\n"
+        f"Сериал: «{series['title']}» ({series['year']}) {rating_str}\n"
         f"Жанры: {series['genres']}\nОписание: {series['description']}\n\n"
-        "— 100–150 слов\n— Стиль: живой, как совет другу\n— Скажи, почему стоит смотреть\n"
-        "— 1–2 эмодзи в начале\n— Хэштеги: #сериал #кино #рекомендация #кислородпродакшен"
+        "— 100–150 слов\n— 1–2 эмодзи\n"
+        "— Хэштеги: #сериал #кино #рекомендация #кислородпродакшен"
     )
     text = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
     return text, series["poster_url"]
@@ -950,16 +979,12 @@ async def generate_new_film_post() -> tuple:
         return "", ""
     rating_str = f"⭐ {film['rating']}" if film.get("rating") else ""
     trailer_line = f"\n▶️ Трейлер: {film['trailer_url']}" if film.get("trailer_url") else ""
-    system = (
-        "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН. "
-        "Пишешь анонс новинки кино — с интригой и вдохновением. "
-        "Отвечай ТОЛЬКО текстом поста — без пояснений, без markdown."
-    )
+    system = "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН. Отвечай ТОЛЬКО текстом поста."
     user_msg = (
         f"Новинка: «{film['title']}» ({film['year']}) {rating_str}\n"
         f"Жанры: {film['genres']}\nОписание: {film['description']}\n\n"
-        "— 100–150 слов\n— Заинтригуй, не пересказывай сюжет полностью\n— 1–2 эмодзи в начале\n"
-        f"— Если есть трейлер:{trailer_line}\n— Хэштеги: #новинка #кино #премьера #кислородпродакшен"
+        f"— 100–150 слов\n— 1–2 эмодзи{trailer_line}\n"
+        "— Хэштеги: #новинка #кино #премьера #кислородпродакшен"
     )
     text = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
     return text, film["poster_url"]
@@ -973,14 +998,13 @@ async def generate_cartoon_post() -> tuple:
     trailer_line = f"\n▶️ Трейлер: {cartoon['trailer_url']}" if cartoon.get("trailer_url") else ""
     system = (
         "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН — студии, создающей мультфильмы с AI. "
-        "Пишешь пост о мультфильме — с теплотой, вдохновляя любовь к анимации. "
-        "Отвечай ТОЛЬКО текстом поста — без пояснений, без markdown."
+        "Отвечай ТОЛЬКО текстом поста."
     )
     user_msg = (
         f"Мультфильм: «{cartoon['title']}» ({cartoon['year']}) {rating_str}\n"
         f"Жанры: {cartoon['genres']}\nОписание: {cartoon['description']}\n\n"
-        "— 100–150 слов\n— Тёплый, воодушевляющий стиль\n— 1–2 эмодзи (например 🎨✨)\n"
-        f"— Если есть трейлер:{trailer_line}\n— Хэштеги: #мультфильм #анимация #кислородпродакшен #кино"
+        f"— 100–150 слов\n— 1–2 эмодзи (🎨✨){trailer_line}\n"
+        "— Хэштеги: #мультфильм #анимация #кислородпродакшен"
     )
     text = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
     return text, cartoon["poster_url"]
@@ -991,15 +1015,11 @@ async def generate_poster_post() -> tuple:
     if not movie:
         return "", ""
     rating_str = f"⭐ {movie['rating']}" if movie.get("rating") else ""
-    system = (
-        "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН. "
-        "Пишешь короткую подпись к постеру фильма — лаконично и атмосферно. "
-        "Отвечай ТОЛЬКО текстом поста — без пояснений, без markdown."
-    )
+    system = "Ты — редактор Telegram-канала КИСЛОРОД ПРОДАКШЕН. Отвечай ТОЛЬКО текстом поста."
     user_msg = (
         f"Фильм: «{movie['title']}» ({movie['year']}) {rating_str}\n"
         f"Жанры: {movie['genres']}\nОписание: {movie['description']}\n\n"
-        "— 40–70 слов — КОРОТКО и атмосферно\n— Цепляющая первая строка\n— 1 эмодзи\n"
+        "— 40–70 слов, коротко и атмосферно\n— 1 эмодзи\n"
         "— Хэштеги: #постер #кино #кислородпродакшен"
     )
     text = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
@@ -1019,11 +1039,13 @@ async def send_post(bot, channel: str, text: str, image_url: str = ""):
             try:
                 await bot.send_photo(chat_id=channel, photo=image_url, caption=text)
                 logger.info(f"✅ Фото+текст → {channel}")
+                _stats["posts_sent"] += 1
                 return
             except Exception as e:
                 logger.warning(f"Фото не отправилось ({e}), отправляю текст")
         await bot.send_message(chat_id=channel, text=text)
         logger.info(f"✅ Текст → {channel}")
+        _stats["posts_sent"] += 1
     except Exception as e:
         logger.error(f"Ошибка отправки в {channel}: {e}")
 
@@ -1032,11 +1054,11 @@ async def send_post(bot, channel: str, text: str, image_url: str = ""):
 # JOB FUNCTIONS — расписание
 # ─────────────────────────────────────────────
 
-async def job_kislorod_morning(context: ContextTypes.DEFAULT_TYPE):
+async def job_kislorod_morning(context):
     text, img = await generate_kislorod_post()
     await send_post(context.bot, CHANNEL_KISLOROD, text, img)
 
-async def job_kislorod_new_film(context: ContextTypes.DEFAULT_TYPE):
+async def job_kislorod_new_film(context):
     text, img = await generate_new_film_post()
     if text:
         await send_post(context.bot, CHANNEL_KISLOROD, text, img)
@@ -1044,7 +1066,7 @@ async def job_kislorod_new_film(context: ContextTypes.DEFAULT_TYPE):
         text2, img2 = await generate_kislorod_post()
         await send_post(context.bot, CHANNEL_KISLOROD, text2, img2)
 
-async def job_kislorod_trailer(context: ContextTypes.DEFAULT_TYPE):
+async def job_kislorod_trailer(context):
     text, poster = await generate_trailer_post()
     if text:
         await send_post(context.bot, CHANNEL_KISLOROD, text, poster)
@@ -1053,7 +1075,7 @@ async def job_kislorod_trailer(context: ContextTypes.DEFAULT_TYPE):
         text2, img2 = await generate_kislorod_post()
         await send_post(context.bot, CHANNEL_KISLOROD, text2, img2)
 
-async def job_kislorod_cartoon(context: ContextTypes.DEFAULT_TYPE):
+async def job_kislorod_cartoon(context):
     text, img = await generate_cartoon_post()
     if text:
         await send_post(context.bot, CHANNEL_KISLOROD, text, img)
@@ -1061,11 +1083,11 @@ async def job_kislorod_cartoon(context: ContextTypes.DEFAULT_TYPE):
         text2, img2 = await generate_kislorod_post()
         await send_post(context.bot, CHANNEL_KISLOROD, text2, img2)
 
-async def job_kislorod_evening(context: ContextTypes.DEFAULT_TYPE):
+async def job_kislorod_evening(context):
     text, img = await generate_kislorod_post()
     await send_post(context.bot, CHANNEL_KISLOROD, text, img)
 
-async def job_kislorod_poster(context: ContextTypes.DEFAULT_TYPE):
+async def job_kislorod_poster(context):
     text, img = await generate_poster_post()
     if text:
         await send_post(context.bot, CHANNEL_KISLOROD, text, img)
@@ -1073,11 +1095,11 @@ async def job_kislorod_poster(context: ContextTypes.DEFAULT_TYPE):
         text2, img2 = await generate_kislorod_post()
         await send_post(context.bot, CHANNEL_KISLOROD, text2, img2)
 
-async def job_actor_morning(context: ContextTypes.DEFAULT_TYPE):
+async def job_actor_morning(context):
     text, img = await generate_actor_post()
     await send_post(context.bot, CHANNEL_ACTOR, text, img)
 
-async def job_actor_series(context: ContextTypes.DEFAULT_TYPE):
+async def job_actor_series(context):
     text, img = await generate_series_post()
     if text:
         await send_post(context.bot, CHANNEL_ACTOR, text, img)
@@ -1085,11 +1107,11 @@ async def job_actor_series(context: ContextTypes.DEFAULT_TYPE):
         text2, img2 = await generate_actor_post()
         await send_post(context.bot, CHANNEL_ACTOR, text2, img2)
 
-async def job_actor_evening(context: ContextTypes.DEFAULT_TYPE):
+async def job_actor_evening(context):
     text, img = await generate_actor_post()
     await send_post(context.bot, CHANNEL_ACTOR, text, img)
 
-async def job_actor_filmography(context: ContextTypes.DEFAULT_TYPE):
+async def job_actor_filmography(context):
     text, img = await generate_filmography_post()
     if text:
         await send_post(context.bot, CHANNEL_ACTOR, text, img)
@@ -1099,35 +1121,205 @@ async def job_actor_filmography(context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────────────────────
-# ОБРАБОТЧИКИ TELEGRAM
+# /start — ОНБОРДИНГ
 # ─────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    _stats["total_users"].add(user_id)
     context.user_data.clear()
+    context.user_data["onboarding"] = True
+
+    step = ONBOARDING_STEPS[0]
     await update.message.reply_text(
-        "🎬 КИСЛОРОД ПРОДАКШЕН — AI АССИСТЕНТ\n\n"
-        "Творческая AI-студия нового поколения.\n"
-        "Мультфильмы • Клипы • Сериалы • Реклама\n\n"
-        "Здесь ты можешь общаться с AI-наставником в своей роли:\n"
-        "🎭 Актёр — подготовка к ролям, разбор проб\n"
-        "🎬 Режиссёр — концепции, раскадровки, визуальный стиль\n"
-        "✍️ Сценарист — сюжеты, диалоги, персонажи\n"
-        "💼 Продюсер — питч, бюджет, производственный план\n"
-        "🤝 Заказчик — ТЗ, бриф, креативная концепция\n\n"
-        "👇 Нажми кнопку 📋 Меню чтобы выбрать роль и начать:",
+        step["text"],
+        reply_markup=InlineKeyboardMarkup(step["buttons"]),
+    )
+    # Показываем кнопку меню
+    await update.message.reply_text(
+        "Или нажми 📋 Меню в любой момент.",
         reply_markup=webapp_keyboard(),
     )
 
+
+# ─────────────────────────────────────────────
+# CALLBACK HANDLER
+# ─────────────────────────────────────────────
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     action = query.data
 
+    # ── ОНБОРДИНГ ──────────────────────────────
+
+    if action.startswith("onboard_"):
+        role_map = {
+            "onboard_actor":        "actor",
+            "onboard_director":     "director",
+            "onboard_screenwriter": "screenwriter",
+            "onboard_producer":     "producer",
+            "onboard_client":       "client",
+            "onboard_general":      "general",
+        }
+        if action in role_map:
+            role_key = role_map[action]
+            context.user_data["role"] = role_key
+            context.user_data["history"] = []
+            _stats_inc_role(role_key)
+            # Шаг 2
+            await query.edit_message_text(
+                ONBOARDING_STEP2["text"],
+                reply_markup=InlineKeyboardMarkup(ONBOARDING_STEP2["buttons"]),
+            )
+            return
+
+        if action == "onboard_finish_chat":
+            role_key = context.user_data.get("role", "general")
+            context.user_data.pop("onboarding", None)
+            await query.edit_message_text(
+                ONBOARDING_STEP3_CHAT,
+                reply_markup=hints_keyboard(role_key),
+            )
+            return
+
+        if action == "onboard_finish_tool":
+            context.user_data.pop("onboarding", None)
+            await query.edit_message_text(ONBOARDING_STEP3_TOOL)
+            return
+
+    # ── ИНСТРУМЕНТЫ ────────────────────────────
+
+    if action == "show_tools":
+        await query.edit_message_text(
+            "🛠 Творческие инструменты студии КИСЛОРОД:\n\n"
+            "🎬 Раскадровка — создай текстовую раскадровку сцены\n"
+            "🎭 Персонаж — полная карточка героя для актёра/сценариста\n"
+            "📝 Сцена — готовая сцена в сценарном формате\n"
+            "🎤 Монолог — монолог для актёра с подтекстом\n"
+            "🔁 Переписать — перенеси текст в другой жанр/стиль\n"
+            "💾 Сохранения — твои сохранённые работы",
+            reply_markup=tools_keyboard(),
+        )
+        return
+
+    if action == "back_to_hints":
+        role_key = context.user_data.get("role", "general")
+        welcome = ROLE_PROMPTS.get(role_key, ROLE_PROMPTS["general"])["welcome"]
+        await query.edit_message_text(welcome, reply_markup=hints_keyboard(role_key))
+        return
+
+    if action == "tool_storyboard":
+        context.user_data["awaiting"] = "storyboard"
+        await query.edit_message_text(
+            "🎬 Опиши сцену для раскадровки:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
+            ]]),
+        )
+        _stats_inc_tool("storyboard")
+        return
+
+    if action == "tool_character":
+        context.user_data["awaiting"] = "character"
+        await query.edit_message_text(
+            "🎭 Опиши персонажа:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
+            ]]),
+        )
+        _stats_inc_tool("character")
+        return
+
+    if action == "tool_scene":
+        context.user_data["awaiting"] = "scene"
+        await query.edit_message_text(
+            "📝 Опиши что должно произойти в сцене:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
+            ]]),
+        )
+        _stats_inc_tool("scene")
+        return
+
+    if action == "tool_monologue":
+        context.user_data["awaiting"] = "monologue"
+        await query.edit_message_text(
+            "🎤 Опиши персонажа и его состояние:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
+            ]]),
+        )
+        _stats_inc_tool("monologue")
+        return
+
+    if action == "tool_rewrite":
+        context.user_data["awaiting"] = "rewrite"
+        await query.edit_message_text(
+            "🔁 Отправь текст сцены или диалога для переписки:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
+            ]]),
+        )
+        _stats_inc_tool("rewrite")
+        return
+
+    # ── СОХРАНЕНИЯ ─────────────────────────────
+
+    if action == "show_saves":
+        saves = _get_saves(context)
+        if not saves:
+            await query.edit_message_text(
+                "💾 У тебя пока нет сохранённых работ.\n\n"
+                "После генерации сцены, монолога, раскадровки или карточки персонажа "
+                "нажми кнопку 💾 Сохранить.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("◀️ Назад", callback_data="back_to_hints"),
+                ]]),
+            )
+            return
+
+        lines = ["💾 Твои сохранённые работы:\n"]
+        for i, s in enumerate(saves, 1):
+            label = SAVE_TYPE_LABELS.get(s["type"], s["type"])
+            lines.append(f"{i}. {label} — {s['title']}")
+
+        lines.append("\nОтправь номер (например: 1) чтобы получить работу.")
+        context.user_data["awaiting"] = "view_save"
+        await query.edit_message_text(
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ Назад", callback_data="back_to_hints"),
+            ]]),
+        )
+        return
+
+    # ── СОХРАНИТЬ РАБОТУ ───────────────────────
+
+    if action.startswith("save|"):
+        parts = action.split("|", 2)
+        if len(parts) == 3:
+            _, save_type, title = parts
+            # Текст последнего ответа бота сохраняем из истории
+            history = context.user_data.get("history", [])
+            content = ""
+            for msg in reversed(history):
+                if msg["role"] == "assistant":
+                    content = msg["text"]
+                    break
+            # Если история пустая — сохраняем заголовок как заглушку
+            if not content:
+                content = f"[{title}]"
+            _add_save(context, save_type, title, content)
+            await query.answer("✅ Сохранено!", show_alert=False)
+        return
+
+    # ── УПРАВЛЕНИЕ ─────────────────────────────
+
     if action == "change_role":
         context.user_data.clear()
         await query.edit_message_text(
-            "🎬 Нажми кнопку 📋 Меню внизу, чтобы выбрать роль:",
+            "🎬 Нажми кнопку 📋 Меню внизу, чтобы выбрать роль.",
             reply_markup=None,
         )
         return
@@ -1160,7 +1352,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "new_scene":
         context.user_data["awaiting"] = "scene"
         await query.edit_message_text(
-            "📝 Опиши новую сцену для написания:",
+            "📝 Опиши новую сцену:",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
             ]]),
@@ -1170,7 +1362,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "new_monologue":
         context.user_data["awaiting"] = "monologue"
         await query.edit_message_text(
-            "🎤 Опиши нового персонажа для монолога:",
+            "🎤 Опиши персонажа для монолога:",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
             ]]),
@@ -1180,7 +1372,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "new_rewrite":
         context.user_data["awaiting"] = "rewrite"
         await query.edit_message_text(
-            "🔁 Отправь текст сцены или диалога для переписки:",
+            "🔁 Отправь текст для переписки:",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
             ]]),
@@ -1205,23 +1397,22 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         context.user_data["role"] = role_key
         context.user_data["history"] = []
+        _stats_inc_role(role_key)
         await query.edit_message_text(
             ROLE_PROMPTS[role_key]["welcome"],
             reply_markup=hints_keyboard(role_key),
         )
         return
 
-    # Обработка нажатия на подсказку
+    # ── ПОДСКАЗКИ ──────────────────────────────
+
     if action in HINT_TEXTS:
         role_key = context.user_data.get("role", "general")
         hint_text = HINT_TEXTS[action]
         chat_id = query.message.chat_id
 
-        await query.answer()
         await context.bot.send_message(
-            chat_id=chat_id,
-            text=f"_{hint_text}_",
-            parse_mode="Markdown",
+            chat_id=chat_id, text=f"_{hint_text}_", parse_mode="Markdown",
         )
 
         history = context.user_data.get("history", [])
@@ -1244,13 +1435,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         history.append({"role": "assistant", "text": response})
         context.user_data["history"] = history[-30:]
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=response,
-            reply_markup=hints_keyboard(role_key),
-        )
+        _stats["total_messages"] += 1
+
+        kb = hints_keyboard(role_key)
+        await context.bot.send_message(chat_id=chat_id, text=response, reply_markup=kb)
         return
 
+
+# ─────────────────────────────────────────────
+# WEBAPP DATA
+# ─────────────────────────────────────────────
 
 async def handle_webapp_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = update.message.web_app_data.data.strip()
@@ -1259,19 +1453,48 @@ async def handle_webapp_data(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     context.user_data["role"] = role_key
     context.user_data["history"] = []
+    _stats_inc_role(role_key)
     await update.message.reply_text(
         ROLE_PROMPTS[role_key]["welcome"],
         reply_markup=hints_keyboard(role_key),
     )
 
 
+# ─────────────────────────────────────────────
+# HANDLE MESSAGE
+# ─────────────────────────────────────────────
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text.strip()
     if not user_text:
         return
 
-    # Перехват состояний ожидания
+    user_id = update.effective_user.id
+    _stats["total_users"].add(user_id)
+    _stats["total_messages"] += 1
+
     awaiting = context.user_data.get("awaiting")
+
+    # Просмотр сохранения по номеру
+    if awaiting == "view_save":
+        context.user_data.pop("awaiting", None)
+        saves = _get_saves(context)
+        try:
+            idx = int(user_text.strip()) - 1
+            if 0 <= idx < len(saves):
+                s = saves[idx]
+                label = SAVE_TYPE_LABELS.get(s["type"], s["type"])
+                role_key = context.user_data.get("role", "general")
+                await update.message.reply_text(
+                    f"{label}: {s['title']}\n\n{s['content']}",
+                    reply_markup=hints_keyboard(role_key),
+                )
+            else:
+                await update.message.reply_text("Нет сохранения с таким номером.")
+        except ValueError:
+            await update.message.reply_text("Отправь номер из списка, например: 1")
+        return
+
     if awaiting == "storyboard":
         context.user_data.pop("awaiting", None)
         await _generate_storyboard(update, context, user_text)
@@ -1289,13 +1512,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _generate_monologue(update, context, user_text)
         return
     if awaiting == "rewrite":
-        # rewrite требует стиль — сохраняем текст и спрашиваем стиль
         context.user_data["rewrite_text"] = user_text
         context.user_data["awaiting"] = "rewrite_style"
         await update.message.reply_text(
-            "🎨 В каком жанре/стиле переписать?\n\n"
-            "Например: _нуар, комедия, хоррор, романтика, триллер, документальный, советское кино_\n\n"
-            "Напиши жанр или стиль:",
+            "🎨 В каком жанре/стиле переписать?\n"
+            "_Например: нуар, комедия, хоррор, советское кино_",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
@@ -1309,14 +1530,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     role_key = context.user_data.get("role")
-
     if not role_key:
         role_key = "general"
         context.user_data["role"] = role_key
         context.user_data["history"] = []
         await update.message.reply_text(
-            "🌐 Роль не выбрана — отвечаю как общий ассистент студии.\n"
-            "Ты можешь выбрать конкретную роль через 📋 Меню.",
+            "🌐 Роль не выбрана — отвечаю как общий ассистент. "
+            "Нажми 📋 Меню, чтобы выбрать роль.",
             reply_markup=webapp_keyboard(),
         )
 
@@ -1338,7 +1558,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
     if not response or not response.strip():
-        response = "Не смог сформулировать ответ. Попробуй переформулировать вопрос или очисти историю чата."
+        response = "Не смог сформулировать ответ. Попробуй переформулировать или очисти историю."
 
     history.append({"role": "assistant", "text": response})
     context.user_data["history"] = history[-30:]
@@ -1346,22 +1566,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────────────────────
-# РАСКАДРОВКА — /storyboard
+# ИНСТРУМЕНТЫ — КОМАНДЫ
 # ─────────────────────────────────────────────
 
 async def storyboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
+    _stats_inc_tool("storyboard")
     if args:
-        scene_description = " ".join(args)
-        await _generate_storyboard(update, context, scene_description)
+        await _generate_storyboard(update, context, " ".join(args))
     else:
         context.user_data["awaiting"] = "storyboard"
         await update.message.reply_text(
-            "🎬 Раскадровка сцены\n\n"
-            "Опиши сцену — жанр, локацию, персонажей, действие и настроение.\n\n"
-            "Например:\n"
-            "_Ночная улица, дождь. Детектив выходит из машины и видит тело. "
-            "Атмосфера нуар, тревожное напряжение._",
+            "🎬 Раскадровка сцены\n\nОпиши сцену — жанр, локацию, персонажей, действие.\n\n"
+            "_Например: Ночная улица, дождь. Детектив видит тело. Нуар._",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
@@ -1375,28 +1592,21 @@ async def _generate_storyboard(update: Update, context: ContextTypes.DEFAULT_TYP
 
     system = (
         "Ты — опытный режиссёр и раскадровщик. "
-        "Создаёшь детальные текстовые раскадровки в профессиональном формате. "
-        "Отвечай ТОЛЬКО раскадровкой — без предисловий и пояснений."
+        "Создаёшь детальные текстовые раскадровки. "
+        "Отвечай ТОЛЬКО раскадровкой — без предисловий."
     )
     user_msg = (
         f"Создай текстовую раскадровку для сцены:\n\n{scene}\n\n"
         "Формат каждого кадра:\n"
         "━━━━━━━━━━━━━━━━\n"
         "КАДР [номер]\n"
-        "Ракурс: [тип съёмки — крупный/средний/общий/детальный план, угол]\n"
-        "Локация: [место, время суток, погода]\n"
-        "Действие: [что происходит в кадре]\n"
-        "Свет: [характер освещения, источники]\n"
-        "Звук: [музыка, звуки, тишина]\n"
-        "Реплика: [диалог или —]\n"
-        "Длительность: [секунды]\n\n"
-        "Сделай 5–8 кадров. После всех кадров добавь:\n"
-        "РЕЖИССЁРСКАЯ ЗАМЕТКА: [1–2 предложения об общей атмосфере и ключевом визуальном решении]"
+        "Ракурс: ...\nЛокация: ...\nДействие: ...\nСвет: ...\nЗвук: ...\nРеплика: ...\nДлительность: ...\n\n"
+        "5–8 кадров. После всех кадров:\n"
+        "РЕЖИССЁРСКАЯ ЗАМЕТКА: [1–2 предложения об атмосфере]"
     )
 
     stop_typing = asyncio.Event()
     typing_task = asyncio.create_task(keep_typing(context.bot, chat_id, stop_typing))
-
     try:
         response = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
     finally:
@@ -1410,33 +1620,35 @@ async def _generate_storyboard(update: Update, context: ContextTypes.DEFAULT_TYP
     if not response or response.startswith("⚠️"):
         response = "Не удалось сгенерировать раскадровку. Попробуй снова."
 
+    # Сохраняем в историю для последующего сохранения
+    history = context.user_data.get("history", [])
+    history.append({"role": "assistant", "text": response})
+    context.user_data["history"] = history[-30:]
+
+    short_title = scene[:30]
     await context.bot.send_message(
         chat_id=chat_id,
         text=f"🎬 Раскадровка сцены\n\n{response}",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔄 Новая раскадровка", callback_data="new_storyboard"),
-            InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
-        ]]),
+        reply_markup=InlineKeyboardMarkup([
+            make_save_row("storyboard", short_title),
+            [
+                InlineKeyboardButton("🔄 Новая раскадровка", callback_data="new_storyboard"),
+                InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
+            ],
+        ]),
     )
 
 
-# ─────────────────────────────────────────────
-# КАРТОЧКА ПЕРСОНАЖА — /character
-# ─────────────────────────────────────────────
-
 async def character_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
+    _stats_inc_tool("character")
     if args:
-        char_description = " ".join(args)
-        await _generate_character(update, context, char_description)
+        await _generate_character(update, context, " ".join(args))
     else:
         context.user_data["awaiting"] = "character"
         await update.message.reply_text(
-            "🎭 Карточка персонажа\n\n"
-            "Опиши персонажа — имя, возраст, жанр, роль в истории и любые детали.\n\n"
-            "Например:\n"
-            "_Максим, 35 лет, бывший полицейский. Главный герой криминального триллера. "
-            "Циничный, но справедливый. Потерял семью._",
+            "🎭 Карточка персонажа\n\nОпиши персонажа — имя, возраст, жанр, роль в истории.\n\n"
+            "_Например: Максим, 35 лет, бывший полицейский. Криминальный триллер._",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
@@ -1450,25 +1662,18 @@ async def _generate_character(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     system = (
         "Ты — опытный сценарист и актёрский педагог. "
-        "Создаёшь детальные карточки персонажей для актёров и сценаристов. "
-        "Отвечай ТОЛЬКО карточкой персонажа — без предисловий."
+        "Создаёшь детальные карточки персонажей. "
+        "Отвечай ТОЛЬКО карточкой — без предисловий."
     )
     user_msg = (
-        f"Создай полную карточку персонажа на основе описания:\n\n{description}\n\n"
-        "Формат карточки:\n\n"
-        "👤 ИМЯ И ВОЗРАСТ\n[имя, возраст, профессия]\n\n"
-        "🧬 ФИЗИЧЕСКИЙ ПОРТРЕТ\n[внешность, телосложение, особые черты, стиль одежды]\n\n"
-        "🧠 ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ\n[характер, сильные и слабые стороны, страхи, желания]\n\n"
-        "📖 ИСТОРИЯ И ПРЕДЫСТОРИЯ\n[откуда пришёл, ключевые события жизни, травмы]\n\n"
-        "🎯 МОТИВАЦИЯ\n[чего хочет в истории, от чего убегает, внутренний конфликт]\n\n"
-        "🗣 РЕЧЬ И ПОВЕДЕНИЕ\n[как говорит, любимые фразы, жесты, привычки]\n\n"
-        "🎭 СОВЕТЫ АКТЁРУ\n[как войти в образ, физические якоря, эмоциональный ключ]\n\n"
-        "📊 АРК РАЗВИТИЯ\n[где персонаж в начале → что меняется → где в конце]"
+        f"Создай карточку персонажа:\n\n{description}\n\n"
+        "👤 ИМЯ И ВОЗРАСТ\n🧬 ФИЗИЧЕСКИЙ ПОРТРЕТ\n🧠 ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ\n"
+        "📖 ИСТОРИЯ И ПРЕДЫСТОРИЯ\n🎯 МОТИВАЦИЯ\n🗣 РЕЧЬ И ПОВЕДЕНИЕ\n"
+        "🎭 СОВЕТЫ АКТЁРУ\n📊 АРК РАЗВИТИЯ"
     )
 
     stop_typing = asyncio.Event()
     typing_task = asyncio.create_task(keep_typing(context.bot, chat_id, stop_typing))
-
     try:
         response = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
     finally:
@@ -1482,36 +1687,34 @@ async def _generate_character(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not response or response.startswith("⚠️"):
         response = "Не удалось создать карточку. Попробуй снова."
 
+    history = context.user_data.get("history", [])
+    history.append({"role": "assistant", "text": response})
+    context.user_data["history"] = history[-30:]
+
+    short_title = description[:30]
     await context.bot.send_message(
         chat_id=chat_id,
         text=f"🎭 Карточка персонажа\n\n{response}",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔄 Новый персонаж", callback_data="new_character"),
-            InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
-        ]]),
+        reply_markup=InlineKeyboardMarkup([
+            make_save_row("character", short_title),
+            [
+                InlineKeyboardButton("🔄 Новый персонаж", callback_data="new_character"),
+                InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
+            ],
+        ]),
     )
 
 
-# ─────────────────────────────────────────────
-# НАПИСАТЬ СЦЕНУ — /scene
-# ─────────────────────────────────────────────
-
 async def scene_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /scene — пишет готовую сцену в сценарном формате (INT./EXT., диалоги, ремарки).
-    /scene <описание> — генерирует сразу.
-    """
     args = context.args
+    _stats_inc_tool("scene")
     if args:
         await _generate_scene(update, context, " ".join(args))
     else:
         context.user_data["awaiting"] = "scene"
         await update.message.reply_text(
-            "📝 Написать сцену\n\n"
-            "Опиши что должно произойти в сцене: место, персонажи, конфликт, жанр.\n\n"
-            "Например:\n"
-            "_Кухня, поздний вечер. Муж и жена выясняют отношения после долгого молчания. "
-            "Жанр — психологическая драма._",
+            "📝 Написать сцену\n\nОпиши что должно произойти: место, персонажи, конфликт, жанр.\n\n"
+            "_Например: Кухня, поздний вечер. Муж и жена выясняют отношения. Психологическая драма._",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
@@ -1525,25 +1728,17 @@ async def _generate_scene(update: Update, context: ContextTypes.DEFAULT_TYPE, de
 
     system = (
         "Ты — профессиональный сценарист студии КИСЛОРОД ПРОДАКШЕН. "
-        "Пишешь сцены в стандартном сценарном формате: заголовок INT./EXT., "
-        "ремарки действия, имена персонажей капслоком над репликой, диалоги. "
-        "Язык живой, кинематографичный. "
-        "Отвечай ТОЛЬКО текстом сцены — без предисловий и пояснений."
+        "Пишешь сцены в сценарном формате: INT./EXT., ремарки, диалоги. "
+        "Отвечай ТОЛЬКО текстом сцены."
     )
     user_msg = (
-        f"Напиши готовую сцену на основе описания:\n\n{description}\n\n"
-        "Требования:\n"
-        "— Стандартный сценарный формат (INT./EXT., ремарки, реплики)\n"
-        "— Длина: 1–2 страницы (примерно 150–300 слов)\n"
-        "— Живые, естественные диалоги\n"
-        "— Конкретные, кинематографичные ремарки (что камера может снять)\n"
-        "— Напряжение или эмоция должны быть ощутимы\n"
-        "— В конце добавь строку: КОНЕЦ СЦЕНЫ"
+        f"Напиши сцену:\n\n{description}\n\n"
+        "— Сценарный формат (INT./EXT., ремарки, реплики)\n"
+        "— 150–300 слов\n— Живые диалоги\n— В конце: КОНЕЦ СЦЕНЫ"
     )
 
     stop_typing = asyncio.Event()
     typing_task = asyncio.create_task(keep_typing(context.bot, chat_id, stop_typing))
-
     try:
         response = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
     finally:
@@ -1557,38 +1752,35 @@ async def _generate_scene(update: Update, context: ContextTypes.DEFAULT_TYPE, de
     if not response or response.startswith("⚠️"):
         response = "Не удалось написать сцену. Попробуй снова."
 
+    history = context.user_data.get("history", [])
+    history.append({"role": "assistant", "text": response})
+    context.user_data["history"] = history[-30:]
+
+    short_title = description[:30]
     await context.bot.send_message(
         chat_id=chat_id,
         text=f"📝 Сцена\n\n{response}",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("📝 Новая сцена", callback_data="new_scene"),
-            InlineKeyboardButton("🔁 Переписать", callback_data="new_rewrite"),
-        ], [
-            InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
-        ]]),
+        reply_markup=InlineKeyboardMarkup([
+            make_save_row("scene", short_title),
+            [
+                InlineKeyboardButton("📝 Новая сцена", callback_data="new_scene"),
+                InlineKeyboardButton("🔁 Переписать", callback_data="new_rewrite"),
+            ],
+            [InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role")],
+        ]),
     )
 
 
-# ─────────────────────────────────────────────
-# МОНОЛОГ — /monologue
-# ─────────────────────────────────────────────
-
 async def monologue_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /monologue — пишет монолог под конкретный образ и эмоцию.
-    /monologue <описание> — генерирует сразу.
-    """
     args = context.args
+    _stats_inc_tool("monologue")
     if args:
         await _generate_monologue(update, context, " ".join(args))
     else:
         context.user_data["awaiting"] = "monologue"
         await update.message.reply_text(
-            "🎤 Монолог для актёра\n\n"
-            "Опиши персонажа, его эмоциональное состояние и ситуацию.\n\n"
-            "Например:\n"
-            "_Мужчина 40 лет, только потерял работу. Говорит сыну, что всё будет хорошо, "
-            "но сам не верит. Горько-нежный тон._",
+            "🎤 Монолог для актёра\n\nОпиши персонажа и его состояние.\n\n"
+            "_Например: Мужчина 40 лет, потерял работу. Говорит сыну что всё хорошо._",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
@@ -1602,24 +1794,17 @@ async def _generate_monologue(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     system = (
         "Ты — опытный сценарист и актёрский педагог студии КИСЛОРОД ПРОДАКШЕН. "
-        "Пишешь монологи для актёров: живые, психологически точные, с подтекстом. "
-        "Монолог должен быть пригоден для работы на сцене или перед камерой. "
-        "Отвечай ТОЛЬКО текстом монолога — без предисловий, ремарок и пояснений."
+        "Пишешь монологи: живые, психологически точные, с подтекстом. "
+        "Отвечай ТОЛЬКО текстом монолога."
     )
     user_msg = (
-        f"Напиши монолог для актёра на основе описания:\n\n{description}\n\n"
-        "Требования:\n"
-        "— Длина: 60–120 слов (примерно 30–60 секунд звучания)\n"
-        "— Живая разговорная речь, не литературная\n"
-        "— Подтекст важнее текста: персонаж говорит одно, думает другое\n"
-        "— Конкретные образы и детали (не абстракции)\n"
-        "— Эмоциональная дуга: монолог должен меняться от начала к концу\n"
-        "— После монолога с новой строки: АКТЁРСКАЯ ЗАМЕТКА: [1 предложение о ключевом подтексте]"
+        f"Напиши монолог:\n\n{description}\n\n"
+        "— 60–120 слов\n— Живая разговорная речь\n— Подтекст важнее текста\n"
+        "— После монолога: АКТЁРСКАЯ ЗАМЕТКА: [о ключевом подтексте]"
     )
 
     stop_typing = asyncio.Event()
     typing_task = asyncio.create_task(keep_typing(context.bot, chat_id, stop_typing))
-
     try:
         response = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
     finally:
@@ -1633,68 +1818,54 @@ async def _generate_monologue(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not response or response.startswith("⚠️"):
         response = "Не удалось написать монолог. Попробуй снова."
 
+    history = context.user_data.get("history", [])
+    history.append({"role": "assistant", "text": response})
+    context.user_data["history"] = history[-30:]
+
+    short_title = description[:30]
     await context.bot.send_message(
         chat_id=chat_id,
         text=f"🎤 Монолог\n\n{response}",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🎤 Новый монолог", callback_data="new_monologue"),
-            InlineKeyboardButton("🔁 Переписать", callback_data="new_rewrite"),
-        ], [
-            InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
-        ]]),
+        reply_markup=InlineKeyboardMarkup([
+            make_save_row("monologue", short_title),
+            [
+                InlineKeyboardButton("🎤 Новый монолог", callback_data="new_monologue"),
+                InlineKeyboardButton("🔁 Переписать", callback_data="new_rewrite"),
+            ],
+            [InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role")],
+        ]),
     )
 
 
-# ─────────────────────────────────────────────
-# ПЕРЕПИСАТЬ В ДРУГОМ СТИЛЕ — /rewrite
-# ─────────────────────────────────────────────
-
 async def rewrite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /rewrite — переписывает сцену или диалог в другом жанре/стиле.
-    Двухшаговый: сначала текст, потом стиль.
-    """
+    _stats_inc_tool("rewrite")
     context.user_data["awaiting"] = "rewrite"
     await update.message.reply_text(
         "🔁 Переписать в другом стиле\n\n"
-        "Отправь текст сцены или диалога, который хочешь переписать.\n\n"
-        "Например, вставь любой диалог или описание сцены — "
-        "и я спрошу, в каком жанре переписать.",
+        "Отправь текст сцены или диалога — я спрошу, в каком жанре переписать.",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
         ]]),
     )
 
 
-async def _generate_rewrite(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    original_text: str,
-    style: str,
-):
+async def _generate_rewrite(update, context, original_text, style):
     chat_id = update.effective_chat.id
     await context.bot.send_message(chat_id=chat_id, text=f"⏳ Переписываю в стиле «{style}» (~15 сек)...")
 
     system = (
         "Ты — профессиональный сценарист студии КИСЛОРОД ПРОДАКШЕН. "
-        "Умеешь переписывать сцены и диалоги в разных жанрах и стилях, "
-        "сохраняя суть ситуации, но меняя тон, атмосферу и язык. "
-        "Отвечай ТОЛЬКО переписанным текстом — без предисловий и пояснений."
+        "Переписываешь сцены в разных жанрах, сохраняя суть. "
+        "Отвечай ТОЛЬКО переписанным текстом."
     )
     user_msg = (
-        f"Перепиши следующую сцену/диалог в стиле «{style}».\n\n"
-        f"ОРИГИНАЛ:\n{original_text}\n\n"
-        "Требования:\n"
-        "— Сохрани суть ситуации и персонажей\n"
-        f"— Полностью измени тон, атмосферу и язык под стиль «{style}»\n"
-        "— Длина переписанного текста примерно равна оригиналу\n"
-        "— В конце с новой строки: РЕЖИССЁРСКАЯ ЗАМЕТКА: "
-        f"[1 предложение о главном отличии этой версии от оригинала]"
+        f"Перепиши в стиле «{style}»:\n\n{original_text}\n\n"
+        f"— Сохрани суть, измени тон под «{style}»\n"
+        "— В конце: РЕЖИССЁРСКАЯ ЗАМЕТКА: [главное отличие от оригинала]"
     )
 
     stop_typing = asyncio.Event()
     typing_task = asyncio.create_task(keep_typing(context.bot, chat_id, stop_typing))
-
     try:
         response = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
     finally:
@@ -1706,18 +1877,91 @@ async def _generate_rewrite(
             pass
 
     if not response or response.startswith("⚠️"):
-        response = "Не удалось переписать текст. Попробуй снова."
+        response = "Не удалось переписать. Попробуй снова."
 
+    history = context.user_data.get("history", [])
+    history.append({"role": "assistant", "text": response})
+    context.user_data["history"] = history[-30:]
+
+    short_title = f"{style[:20]} — {original_text[:15]}"
     await context.bot.send_message(
         chat_id=chat_id,
         text=f"🔁 Переписано в стиле «{style}»\n\n{response}",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔁 Другой стиль", callback_data="new_rewrite"),
-            InlineKeyboardButton("📝 Новая сцена", callback_data="new_scene"),
-        ], [
-            InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
-        ]]),
+        reply_markup=InlineKeyboardMarkup([
+            make_save_row("rewrite", short_title),
+            [
+                InlineKeyboardButton("🔁 Другой стиль", callback_data="new_rewrite"),
+                InlineKeyboardButton("📝 Новая сцена", callback_data="new_scene"),
+            ],
+            [InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role")],
+        ]),
     )
+
+
+# ─────────────────────────────────────────────
+# /saves — Просмотр сохранений через команду
+# ─────────────────────────────────────────────
+
+async def saves_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    saves = _get_saves(context)
+    if not saves:
+        await update.message.reply_text(
+            "💾 У тебя пока нет сохранённых работ.\n\n"
+            "После генерации нажми кнопку 💾 Сохранить."
+        )
+        return
+
+    lines = ["💾 Твои сохранённые работы:\n"]
+    for i, s in enumerate(saves, 1):
+        label = SAVE_TYPE_LABELS.get(s["type"], s["type"])
+        lines.append(f"{i}. {label} — {s['title']}")
+
+    lines.append("\nОтправь номер (например: 1) чтобы получить работу.")
+    context.user_data["awaiting"] = "view_save"
+    await update.message.reply_text("\n".join(lines))
+
+
+# ─────────────────────────────────────────────
+# /stats — Статистика (только для админа)
+# ─────────────────────────────────────────────
+
+@admin_only
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    total_users = len(_stats["total_users"])
+    total_messages = _stats["total_messages"]
+    saves_total = _stats["saves_total"]
+    posts_sent = _stats["posts_sent"]
+
+    role_lines = []
+    role_labels = {
+        "actor": "🎭 Актёр", "director": "🎬 Режиссёр",
+        "screenwriter": "✍️ Сценарист", "producer": "💼 Продюсер",
+        "client": "🤝 Заказчик", "general": "🌐 Общий",
+    }
+    for key, count in sorted(_stats["roles_chosen"].items(), key=lambda x: -x[1]):
+        label = role_labels.get(key, key)
+        role_lines.append(f"  {label}: {count}")
+
+    tool_lines = []
+    tool_labels = {
+        "storyboard": "🎬 Раскадровка", "character": "🎭 Персонаж",
+        "scene": "📝 Сцена", "monologue": "🎤 Монолог", "rewrite": "🔁 Переписка",
+    }
+    for key, count in sorted(_stats["tools_used"].items(), key=lambda x: -x[1]):
+        label = tool_labels.get(key, key)
+        tool_lines.append(f"  {label}: {count}")
+
+    text = (
+        "📊 Статистика бота КИСЛОРОД AI\n\n"
+        f"👥 Уникальных пользователей: {total_users}\n"
+        f"💬 Всего сообщений: {total_messages}\n"
+        f"💾 Сохранений создано: {saves_total}\n"
+        f"📢 Постов опубликовано: {posts_sent}\n\n"
+        "🎭 Выбор ролей:\n" + ("\n".join(role_lines) if role_lines else "  —") + "\n\n"
+        "🛠 Использование инструментов:\n" + ("\n".join(tool_lines) if tool_lines else "  —") + "\n\n"
+        "⚠️ Статистика сбрасывается при перезапуске бота."
+    )
+    await update.message.reply_text(text)
 
 
 # ─────────────────────────────────────────────
@@ -1730,8 +1974,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     base_text = (
         "🎬 КИСЛОРОД AI — Справка\n\n"
-        "/start          — Открыть меню\n"
+        "/start          — Онбординг / сменить роль\n"
         "/clear          — Очистить историю чата\n"
+        "/saves          — 💾 Твои сохранённые работы\n"
         "/storyboard     — Раскадровка сцены 🎬\n"
         "/character      — Карточка персонажа 🎭\n"
         "/scene          — Написать сцену 📝\n"
@@ -1742,25 +1987,19 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     admin_text = (
         "\n── Только для администратора ──\n"
+        "/stats          — 📊 Статистика бота\n"
         "/schedule       — Расписание автопостинга\n\n"
-        "📰 Новостные посты:\n"
-        "/post_now       — Новости кино (оба канала)\n\n"
-        "🎬 Кинопоиск:\n"
+        "📰 Посты:\n"
+        "/post_now       — Новости кино (оба канала)\n"
         "/trailer_now    — Трейлер фильма\n"
         "/film_now       — Новинка кино\n"
         "/series_now     — Рекомендация сериала\n"
-        "/cartoon_now    — Пост о мультфильме\n"
-        "/poster_now     — Красивый постер\n\n"
-        "🎭 Личные посты Александра:\n"
-        "/myfilm_now     — Пост о проекте из фильмографии\n"
+        "/cartoon_now    — Мультфильм\n"
+        "/poster_now     — Красивый постер\n"
+        "/myfilm_now     — Пост из фильмографии\n"
     )
 
-    footer = (
-        "\nКонтакты:\n"
-        "📧 actorsashapotapov@gmail.com\n"
-        "💬 @actorsashapotapov"
-    )
-
+    footer = "\nКонтакты:\n📧 actorsashapotapov@gmail.com\n💬 @actorsashapotapov"
     full_text = base_text + (admin_text if is_admin else "") + footer
     await update.message.reply_text(full_text, reply_markup=webapp_keyboard())
 
@@ -1778,19 +2017,18 @@ async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📅 Расписание автопостинга (МСК):\n\n"
         "📺 @realtimeproductionn — 6 постов в день:\n"
-        "   🕙 10:00 — новости кино и продакшена 📰\n"
+        "   🕙 10:00 — новости кино 📰\n"
         "   🕛 12:00 — новинка кино 🎞\n"
         "   🕑 14:00 — трейлер фильма 🎬\n"
         "   🕓 16:00 — мультфильм 🎨\n"
         "   🕖 19:00 — вечерний дайджест 📰\n"
         "   🕘 21:00 — красивый постер 🖼\n\n"
         "🎭 @actorsashapotapovv — 4 поста в день:\n"
-        "   🕚 11:00 — утренний пост от Александра\n"
-        "   🕐 13:00 — пост о проекте из фильмографии 🎬\n"
+        "   🕚 11:00 — утренний пост\n"
+        "   🕐 13:00 — из фильмографии 🎬\n"
         "   🕒 15:00 — рекомендация сериала 📺\n"
-        "   🕗 20:00 — вечерний пост от Александра\n\n"
-        "Всего: 10 постов в день\n"
-        "Источники: NewsAPI 📰 + Кинопоиск 🎬 + фильмография Александра 🎭"
+        "   🕗 20:00 — вечерний пост\n\n"
+        "Всего: 10 постов в день"
     )
 
 
@@ -1806,28 +2044,25 @@ async def post_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def trailer_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ Ищу свежий трейлер в Кинопоиске (~15 сек)...")
+    await update.message.reply_text("⏳ Ищу трейлер (~15 сек)...")
     text, poster = await generate_trailer_post()
     if text:
         await send_post(context.bot, CHANNEL_KISLOROD, text, poster)
         await send_post(context.bot, CHANNEL_ACTOR, text, poster)
-        await update.message.reply_text("✅ Трейлер опубликован в оба канала!")
+        await update.message.reply_text("✅ Трейлер опубликован!")
     else:
-        await update.message.reply_text(
-            "❌ Не удалось получить трейлер.\n"
-            "Проверь KINOPOISK_API_KEY в переменных Railway."
-        )
+        await update.message.reply_text("❌ Не удалось. Проверь KINOPOISK_API_KEY.")
 
 
 @admin_only
 async def film_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ Ищу новинку кино (~15 сек)...")
+    await update.message.reply_text("⏳ Ищу новинку (~15 сек)...")
     text, img = await generate_new_film_post()
     if text:
         await send_post(context.bot, CHANNEL_KISLOROD, text, img)
-        await update.message.reply_text("✅ Новинка кино опубликована в @realtimeproductionn!")
+        await update.message.reply_text("✅ Новинка опубликована!")
     else:
-        await update.message.reply_text("❌ Не удалось получить новинку кино.\nПроверь KINOPOISK_API_KEY.")
+        await update.message.reply_text("❌ Не удалось. Проверь KINOPOISK_API_KEY.")
 
 
 @admin_only
@@ -1836,9 +2071,9 @@ async def series_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     text, img = await generate_series_post()
     if text:
         await send_post(context.bot, CHANNEL_ACTOR, text, img)
-        await update.message.reply_text("✅ Пост о сериале опубликован в @actorsashapotapovv!")
+        await update.message.reply_text("✅ Пост о сериале опубликован!")
     else:
-        await update.message.reply_text("❌ Не удалось получить сериал.\nПроверь KINOPOISK_API_KEY.")
+        await update.message.reply_text("❌ Не удалось. Проверь KINOPOISK_API_KEY.")
 
 
 @admin_only
@@ -1847,31 +2082,31 @@ async def cartoon_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     text, img = await generate_cartoon_post()
     if text:
         await send_post(context.bot, CHANNEL_KISLOROD, text, img)
-        await update.message.reply_text("✅ Пост о мультфильме опубликован в @realtimeproductionn!")
+        await update.message.reply_text("✅ Пост о мультфильме опубликован!")
     else:
-        await update.message.reply_text("❌ Не удалось получить мультфильм.\nПроверь KINOPOISK_API_KEY.")
+        await update.message.reply_text("❌ Не удалось. Проверь KINOPOISK_API_KEY.")
 
 
 @admin_only
 async def poster_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ Ищу красивый постер (~15 сек)...")
+    await update.message.reply_text("⏳ Ищу постер (~15 сек)...")
     text, img = await generate_poster_post()
     if text:
         await send_post(context.bot, CHANNEL_KISLOROD, text, img)
-        await update.message.reply_text("✅ Постер опубликован в @realtimeproductionn!")
+        await update.message.reply_text("✅ Постер опубликован!")
     else:
-        await update.message.reply_text("❌ Не удалось получить постер.\nПроверь KINOPOISK_API_KEY.")
+        await update.message.reply_text("❌ Не удалось. Проверь KINOPOISK_API_KEY.")
 
 
 @admin_only
 async def myfilm_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ Пишу пост о твоём проекте (~15 сек)...")
+    await update.message.reply_text("⏳ Пишу пост о проекте (~15 сек)...")
     text, img = await generate_filmography_post()
     if text:
         await send_post(context.bot, CHANNEL_ACTOR, text, img)
-        await update.message.reply_text("✅ Пост о проекте опубликован в @actorsashapotapovv!")
+        await update.message.reply_text("✅ Пост о проекте опубликован!")
     else:
-        await update.message.reply_text("❌ Не удалось сгенерировать пост. Попробуй снова.")
+        await update.message.reply_text("❌ Не удалось. Попробуй снова.")
 
 
 # ─────────────────────────────────────────────
@@ -1889,17 +2124,19 @@ def main():
 
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Команды чата (для всех)
+    # Команды для всех
     app.add_handler(CommandHandler("start",        start))
     app.add_handler(CommandHandler("help",         help_command))
     app.add_handler(CommandHandler("clear",        clear_command))
+    app.add_handler(CommandHandler("saves",        saves_command))
     app.add_handler(CommandHandler("storyboard",   storyboard_command))
     app.add_handler(CommandHandler("character",    character_command))
     app.add_handler(CommandHandler("scene",        scene_command))
     app.add_handler(CommandHandler("monologue",    monologue_command))
     app.add_handler(CommandHandler("rewrite",      rewrite_command))
 
-    # Команды только для админа
+    # Только для администратора
+    app.add_handler(CommandHandler("stats",        stats_command))
     app.add_handler(CommandHandler("schedule",     schedule_command))
     app.add_handler(CommandHandler("post_now",     post_now_command))
     app.add_handler(CommandHandler("trailer_now",  trailer_now_command))
@@ -1915,22 +2152,18 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # ── Расписание (UTC = МСК − 3) ──────────────────────────────────
-    app.job_queue.run_daily(job_kislorod_morning,   time=dtime(7,  0))  # 10:00 МСК
-    app.job_queue.run_daily(job_kislorod_new_film,  time=dtime(9,  0))  # 12:00 МСК
-    app.job_queue.run_daily(job_kislorod_trailer,   time=dtime(11, 0))  # 14:00 МСК
-    app.job_queue.run_daily(job_kislorod_cartoon,   time=dtime(13, 0))  # 16:00 МСК
-    app.job_queue.run_daily(job_kislorod_evening,   time=dtime(16, 0))  # 19:00 МСК
-    app.job_queue.run_daily(job_kislorod_poster,    time=dtime(18, 0))  # 21:00 МСК
-    app.job_queue.run_daily(job_actor_morning,      time=dtime(8,  0))  # 11:00 МСК
-    app.job_queue.run_daily(job_actor_filmography,  time=dtime(10, 0))  # 13:00 МСК
-    app.job_queue.run_daily(job_actor_series,       time=dtime(12, 0))  # 15:00 МСК
-    app.job_queue.run_daily(job_actor_evening,      time=dtime(17, 0))  # 20:00 МСК
+    app.job_queue.run_daily(job_kislorod_morning,   time=dtime(7,  0))   # 10:00 МСК
+    app.job_queue.run_daily(job_kislorod_new_film,  time=dtime(9,  0))   # 12:00 МСК
+    app.job_queue.run_daily(job_kislorod_trailer,   time=dtime(11, 0))   # 14:00 МСК
+    app.job_queue.run_daily(job_kislorod_cartoon,   time=dtime(13, 0))   # 16:00 МСК
+    app.job_queue.run_daily(job_kislorod_evening,   time=dtime(16, 0))   # 19:00 МСК
+    app.job_queue.run_daily(job_kislorod_poster,    time=dtime(18, 0))   # 21:00 МСК
+    app.job_queue.run_daily(job_actor_morning,      time=dtime(8,  0))   # 11:00 МСК
+    app.job_queue.run_daily(job_actor_filmography,  time=dtime(10, 0))   # 13:00 МСК
+    app.job_queue.run_daily(job_actor_series,       time=dtime(12, 0))   # 15:00 МСК
+    app.job_queue.run_daily(job_actor_evening,      time=dtime(17, 0))   # 20:00 МСК
 
-    logger.info("=== Расписание ===")
-    logger.info("@realtimeproductionn: 07/09/11/13/16/18 UTC")
-    logger.info("@actorsashapotapovv:  08/10/12/17 UTC")
-    logger.info("=== Bot запущен! ===")
-
+    logger.info("=== Расписание запущено. Bot работает! ===")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
