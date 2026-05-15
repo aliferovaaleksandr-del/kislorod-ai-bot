@@ -31,6 +31,7 @@ KINOPOISK_API_KEY = os.getenv("KINOPOISK_API_KEY")
 RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "29f8af604fmsh7f2433154c9fb3dp1c9f6ajsnf6ab497a500d")
 TMDB_API_KEY = os.getenv("TMDB_API_KEY")
 REPLICATE_API_KEY = os.getenv("REPLICATE_API_KEY")
+HF_TOKEN = os.getenv("HF_TOKEN")
 
 CHANNEL_KISLOROD = "@realtimeproductionn"
 CHANNEL_ACTOR = "@actorsashapotapovv"
@@ -921,7 +922,79 @@ async def generate_streaming_premiere_post() -> tuple[str, str]:
 
 
 # ─────────────────────────────────────────────
-# REPLICATE FLUX.1 — ОСНОВНАЯ ГЕНЕРАЦИЯ
+# HUGGING FACE — ОСНОВНАЯ ГЕНЕРАЦИЯ (SD 3.5 Large)
+# ─────────────────────────────────────────────
+
+async def generate_hf_image(prompt: str) -> bytes | None:
+    """Генерирует изображение через Hugging Face Inference API (SD 3.5 Large)."""
+    if not HF_TOKEN:
+        logger.warning("HuggingFace: нет HF_TOKEN")
+        return None
+
+    # Список моделей — пробуем по очереди если одна недоступна
+    models = [
+        "stabilityai/stable-diffusion-3.5-large",
+        "stabilityai/stable-diffusion-3.5-medium",
+        "black-forest-labs/FLUX.1-dev",
+    ]
+
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "guidance_scale": 4.5,
+            "num_inference_steps": 40,
+            "width": 768,
+            "height": 1024,
+        },
+    }
+
+    for model in models:
+        try:
+            logger.info(f"HuggingFace: пробую модель {model}...")
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                resp = await client.post(
+                    f"https://api-inference.huggingface.co/models/{model}",
+                    json=payload,
+                    headers=headers,
+                )
+
+            if resp.status_code == 200:
+                content_type = resp.headers.get("content-type", "")
+                if "image" in content_type or len(resp.content) > 10000:
+                    logger.info(f"HuggingFace: успех с моделью {model}")
+                    return resp.content
+
+            if resp.status_code == 503:
+                # Модель загружается — ждём и пробуем снова
+                wait_time = resp.json().get("estimated_time", 20)
+                logger.info(f"HuggingFace: модель {model} загружается, жду {wait_time}с...")
+                await asyncio.sleep(min(wait_time, 30))
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    resp = await client.post(
+                        f"https://api-inference.huggingface.co/models/{model}",
+                        json=payload,
+                        headers=headers,
+                    )
+                if resp.status_code == 200:
+                    logger.info(f"HuggingFace: успех с моделью {model} (2я попытка)")
+                    return resp.content
+
+            logger.warning(f"HuggingFace: модель {model} вернула {resp.status_code}, пробую следующую...")
+
+        except Exception as e:
+            logger.error(f"HuggingFace exception ({model}): {e}")
+            continue
+
+    logger.error("HuggingFace: все модели недоступны")
+    return None
+
+
+# ─────────────────────────────────────────────
+# REPLICATE FLUX.1 — РЕЗЕРВНАЯ ГЕНЕРАЦИЯ
 # ─────────────────────────────────────────────
 
 async def generate_replicate_flux(prompt: str) -> bytes | None:
@@ -959,13 +1032,11 @@ async def generate_replicate_flux(prompt: str) -> bytes | None:
             return None
 
         data = resp.json()
-        # Если ответ сразу готов (Prefer: wait)
         output = data.get("output")
         if output:
             image_url = output if isinstance(output, str) else output[0]
             return await _download_image(image_url)
 
-        # Иначе polling
         prediction_id = data.get("id")
         if not prediction_id:
             logger.error("Replicate: нет prediction_id")
@@ -1074,8 +1145,16 @@ async def generate_yandex_art(prompt: str) -> bytes | None:
 async def generate_image(prompt: str) -> bytes | None:
     """
     Основная функция генерации изображений.
-    Сначала пробует FLUX.1 (Replicate), при неудаче — YandexART.
+    1. Hugging Face SD 3.5 Large (бесплатно, основной)
+    2. Replicate FLUX 1.1 Pro (платный резерв)
+    3. YandexART (последний резерв)
     """
+    if HF_TOKEN:
+        logger.info("Генерация через HuggingFace SD 3.5...")
+        result = await generate_hf_image(prompt)
+        if result:
+            return result
+        logger.warning("HuggingFace не ответил, переключаюсь на Replicate...")
     if REPLICATE_API_KEY:
         logger.info("Генерация через FLUX.1 (Replicate)...")
         result = await generate_replicate_flux(prompt)
@@ -3249,7 +3328,8 @@ def main():
     logger.info(f"NEWS_API_KEY:      {'✅' if NEWS_API_KEY      else '❌ НЕ ЗАДАН'}")
     logger.info(f"RAPIDAPI_KEY:      {'✅' if RAPIDAPI_KEY      else '❌ НЕ ЗАДАН'}")
     logger.info(f"TMDB_API_KEY:      {'✅' if TMDB_API_KEY       else '❌ НЕ ЗАДАН'}")
-    logger.info(f"REPLICATE_API_KEY: {'✅' if REPLICATE_API_KEY  else '❌ НЕ ЗАДАН (будет YandexART)'}")
+    logger.info(f"REPLICATE_API_KEY: {'✅' if REPLICATE_API_KEY  else '❌ НЕ ЗАДАН (будет YandexART)'}") 
+    logger.info(f"HF_TOKEN:          {'✅' if HF_TOKEN           else '❌ НЕ ЗАДАН (SD 3.5 отключён)'}")
     logger.info(f"ADMIN_IDS:         {ADMIN_IDS}")
 
     app = Application.builder().token(BOT_TOKEN).build()
