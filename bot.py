@@ -211,7 +211,9 @@ HINT_TEXTS = {
 }
 
 
-def hints_keyboard(role_key: str) -> InlineKeyboardMarkup:
+def hints_keyboard(role_key: str, context: ContextTypes.DEFAULT_TYPE = None) -> InlineKeyboardMarkup:
+    if context is not None:
+        return hints_keyboard_with_count(role_key, context)
     hints = ROLE_HINTS.get(role_key, [])
     rows = []
     for i in range(0, len(hints), 2):
@@ -219,7 +221,6 @@ def hints_keyboard(role_key: str) -> InlineKeyboardMarkup:
         if i + 1 < len(hints):
             row.append(InlineKeyboardButton(hints[i + 1][0], callback_data=hints[i + 1][1]))
         rows.append(row)
-    # Строка управления
     rows.append([
         InlineKeyboardButton("🛠 Инструменты", callback_data="show_tools"),
         InlineKeyboardButton("💾 Сохранённые", callback_data="show_saves"),
@@ -231,8 +232,8 @@ def hints_keyboard(role_key: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def tools_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
+def tools_keyboard(context: ContextTypes.DEFAULT_TYPE = None) -> InlineKeyboardMarkup:
+    rows = [
         [
             InlineKeyboardButton("🎬 Раскадровка", callback_data="tool_storyboard"),
             InlineKeyboardButton("🎭 Персонаж", callback_data="tool_character"),
@@ -245,8 +246,14 @@ def tools_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🔁 Переписать стиль", callback_data="tool_rewrite"),
             InlineKeyboardButton("💾 Мои сохранения", callback_data="show_saves"),
         ],
-        [InlineKeyboardButton("◀️ Назад", callback_data="back_to_hints")],
-    ])
+    ]
+    # История последних запросов
+    if context is not None:
+        recent = context.user_data.get("recent_requests", [])
+        if recent:
+            rows.append([InlineKeyboardButton("📜 Последние запросы", callback_data="show_recent")])
+    rows.append([InlineKeyboardButton("◀️ Назад", callback_data="back_to_hints")])
+    return InlineKeyboardMarkup(rows)
 
 
 def webapp_keyboard():
@@ -550,6 +557,46 @@ async def keep_typing(bot, chat_id: int, stop_event: asyncio.Event):
 
 
 # ─────────────────────────────────────────────
+# ПРОГРЕСС-БАР
+# ─────────────────────────────────────────────
+
+PROGRESS_FRAMES = [
+    "⬜⬜⬜⬜⬜  0%",
+    "🟥⬜⬜⬜⬜  20%",
+    "🟥🟥⬜⬜⬜  40%",
+    "🟥🟥🟥⬜⬜  60%",
+    "🟥🟥🟥🟥⬜  80%",
+    "🟥🟥🟥🟥🟥  100% ✅",
+]
+
+
+async def send_progress(bot, chat_id: int, label: str) -> int:
+    """Отправляет анимированный прогресс-бар. Возвращает message_id для последующего удаления."""
+    msg = await bot.send_message(
+        chat_id=chat_id,
+        text=f"{label}\n\n{PROGRESS_FRAMES[0]}",
+    )
+    for frame in PROGRESS_FRAMES[1:]:
+        await asyncio.sleep(0.9)
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg.message_id,
+                text=f"{label}\n\n{frame}",
+            )
+        except Exception:
+            pass
+    return msg.message_id
+
+
+async def delete_progress(bot, chat_id: int, message_id: int):
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception:
+        pass
+
+
+# ─────────────────────────────────────────────
 # СОХРАНЕНИЕ РАБОТ
 # ─────────────────────────────────────────────
 
@@ -562,14 +609,27 @@ SAVE_TYPE_LABELS = {
     "chat":       "💬 Ответ",
 }
 
+# Папки = типы сохранений
+SAVE_FOLDERS = {
+    "storyboard": "🎬 Раскадровки",
+    "character":  "🎭 Персонажи",
+    "scene":      "📝 Сцены",
+    "monologue":  "🎤 Монологи",
+    "rewrite":    "🔁 Перезаписи",
+    "chat":       "💬 Ответы",
+}
+
 
 def _get_saves(context: ContextTypes.DEFAULT_TYPE) -> list:
     return context.user_data.get("saves", [])
 
 
+def _saves_count(context: ContextTypes.DEFAULT_TYPE) -> int:
+    return len(context.user_data.get("saves", []))
+
+
 def _add_save(context: ContextTypes.DEFAULT_TYPE, save_type: str, title: str, content: str):
     saves = context.user_data.get("saves", [])
-    # Максимум 20 сохранений на пользователя
     if len(saves) >= 20:
         saves.pop(0)
     saves.append({"type": save_type, "title": title, "content": content})
@@ -577,10 +637,19 @@ def _add_save(context: ContextTypes.DEFAULT_TYPE, save_type: str, title: str, co
     _stats["saves_total"] += 1
 
 
-def save_keyboard(save_type: str, title: str) -> InlineKeyboardMarkup:
-    """Кнопка сохранения, которая добавляется под генерируемым контентом."""
-    import urllib.parse
-    # Передаём тип и укороченный заголовок через callback_data
+def _add_to_history(context: ContextTypes.DEFAULT_TYPE, tool: str, description: str):
+    """Сохраняет последние 3 запроса пользователя."""
+    history = context.user_data.get("recent_requests", [])
+    entry = {"tool": tool, "description": description[:60]}
+    # Не дублировать одинаковые подряд
+    if not history or history[-1]["description"] != entry["description"]:
+        history.append(entry)
+    if len(history) > 3:
+        history.pop(0)
+    context.user_data["recent_requests"] = history
+
+
+def save_keyboard(save_type: str, title: str) -> InlineKeyboardButton:
     short_title = title[:30]
     return InlineKeyboardButton(
         "💾 Сохранить", callback_data=f"save|{save_type}|{short_title}"
@@ -589,6 +658,28 @@ def save_keyboard(save_type: str, title: str) -> InlineKeyboardMarkup:
 
 def make_save_row(save_type: str, title: str) -> list:
     return [save_keyboard(save_type, title)]
+
+
+def hints_keyboard_with_count(role_key: str, context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
+    """hints_keyboard с счётчиком сохранений на кнопке."""
+    hints = ROLE_HINTS.get(role_key, [])
+    rows = []
+    for i in range(0, len(hints), 2):
+        row = [InlineKeyboardButton(hints[i][0], callback_data=hints[i][1])]
+        if i + 1 < len(hints):
+            row.append(InlineKeyboardButton(hints[i + 1][0], callback_data=hints[i + 1][1]))
+        rows.append(row)
+    count = _saves_count(context)
+    save_label = f"💾 Сохранённые ({count})" if count > 0 else "💾 Сохранённые"
+    rows.append([
+        InlineKeyboardButton("🛠 Инструменты", callback_data="show_tools"),
+        InlineKeyboardButton(save_label, callback_data="show_saves"),
+    ])
+    rows.append([
+        InlineKeyboardButton("🔄 Сменить роль", callback_data="change_role"),
+        InlineKeyboardButton("🗑 Очистить чат", callback_data="clear_chat"),
+    ])
+    return InlineKeyboardMarkup(rows)
 
 
 # ─────────────────────────────────────────────
@@ -1127,6 +1218,27 @@ async def job_actor_filmography(context):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     _stats["total_users"].add(user_id)
+
+    # ⚡ Режим быстрого старта — если роль уже выбрана, не сбрасываем
+    existing_role = context.user_data.get("role")
+    if existing_role and existing_role in ROLE_PROMPTS:
+        role_label = {
+            "actor": "🎭 Актёр", "director": "🎬 Режиссёр",
+            "screenwriter": "✍️ Сценарист", "producer": "💼 Продюсер",
+            "client": "🤝 Заказчик", "general": "🌐 Общий",
+        }.get(existing_role, existing_role)
+        await update.message.reply_text(
+            f"⚡ Быстрый старт!\n\n"
+            f"Твоя роль: {role_label}\n\n"
+            f"Продолжаем с того места где остановились 👇",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Продолжить", callback_data=f"quickstart_continue")],
+                [InlineKeyboardButton("🔄 Сменить роль", callback_data="quickstart_reset")],
+            ]),
+        )
+        return
+
+    # Новый пользователь — онбординг
     context.user_data.clear()
     context.user_data["onboarding"] = True
 
@@ -1135,7 +1247,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         step["text"],
         reply_markup=InlineKeyboardMarkup(step["buttons"]),
     )
-    # Показываем кнопку меню
     await update.message.reply_text(
         "Или нажми 📋 Меню в любой момент.",
         reply_markup=webapp_keyboard(),
@@ -1167,7 +1278,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["role"] = role_key
             context.user_data["history"] = []
             _stats_inc_role(role_key)
-            # Шаг 2
             await query.edit_message_text(
                 ONBOARDING_STEP2["text"],
                 reply_markup=InlineKeyboardMarkup(ONBOARDING_STEP2["buttons"]),
@@ -1179,34 +1289,106 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop("onboarding", None)
             await query.edit_message_text(
                 ONBOARDING_STEP3_CHAT,
-                reply_markup=hints_keyboard(role_key),
+                reply_markup=hints_keyboard(role_key, context),
             )
             return
 
         if action == "onboard_finish_tool":
             context.user_data.pop("onboarding", None)
-            await query.edit_message_text(ONBOARDING_STEP3_TOOL)
+            await query.edit_message_text(
+                ONBOARDING_STEP3_TOOL,
+                reply_markup=tools_keyboard(context),
+            )
             return
+
+    # ── БЫСТРЫЙ СТАРТ ──────────────────────────
+
+    if action == "quickstart_continue":
+        role_key = context.user_data.get("role", "general")
+        await query.edit_message_text(
+            ROLE_PROMPTS[role_key]["welcome"],
+            reply_markup=hints_keyboard(role_key, context),
+        )
+        return
+
+    if action == "quickstart_reset":
+        context.user_data.clear()
+        step = ONBOARDING_STEPS[0]
+        await query.edit_message_text(
+            step["text"],
+            reply_markup=InlineKeyboardMarkup(step["buttons"]),
+        )
+        return
 
     # ── ИНСТРУМЕНТЫ ────────────────────────────
 
     if action == "show_tools":
+        recent = context.user_data.get("recent_requests", [])
+        recent_text = ""
+        if recent:
+            tool_labels = {
+                "storyboard": "🎬", "character": "🎭",
+                "scene": "📝", "monologue": "🎤", "rewrite": "🔁",
+            }
+            lines = [f"  {tool_labels.get(r['tool'], '•')} {r['description']}" for r in reversed(recent)]
+            recent_text = "\n\n📜 Недавние запросы:\n" + "\n".join(lines)
         await query.edit_message_text(
             "🛠 Творческие инструменты студии КИСЛОРОД:\n\n"
-            "🎬 Раскадровка — создай текстовую раскадровку сцены\n"
-            "🎭 Персонаж — полная карточка героя для актёра/сценариста\n"
-            "📝 Сцена — готовая сцена в сценарном формате\n"
-            "🎤 Монолог — монолог для актёра с подтекстом\n"
-            "🔁 Переписать — перенеси текст в другой жанр/стиль\n"
-            "💾 Сохранения — твои сохранённые работы",
-            reply_markup=tools_keyboard(),
+            "🎬 Раскадровка — текстовая раскадровка сцены\n"
+            "🎭 Персонаж — полная карточка героя\n"
+            "📝 Сцена — сцена в сценарном формате\n"
+            "🎤 Монолог — монолог с подтекстом для актёра\n"
+            "🔁 Переписать — перенести текст в другой жанр\n"
+            "💾 Сохранения — все твои работы по папкам"
+            + recent_text,
+            reply_markup=tools_keyboard(context),
         )
+        return
+
+    if action == "show_recent":
+        recent = context.user_data.get("recent_requests", [])
+        if not recent:
+            await query.answer("История пуста", show_alert=False)
+            return
+        tool_labels = {
+            "storyboard": "🎬 Раскадровка", "character": "🎭 Персонаж",
+            "scene": "📝 Сцена", "monologue": "🎤 Монолог", "rewrite": "🔁 Перезапись",
+        }
+        lines = ["📜 Последние 3 запроса:\n"]
+        repeat_buttons = []
+        for i, r in enumerate(reversed(recent), 1):
+            label = tool_labels.get(r["tool"], r["tool"])
+            lines.append(f"{i}. {label}: {r['description']}")
+            repeat_buttons.append([
+                InlineKeyboardButton(
+                    f"🔁 Повторить #{i}", callback_data=f"repeat|{r['tool']}|{r['description']}"
+                )
+            ])
+        repeat_buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="show_tools")])
+        await query.edit_message_text(
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(repeat_buttons),
+        )
+        return
+
+    if action.startswith("repeat|"):
+        parts = action.split("|", 2)
+        if len(parts) == 3:
+            _, tool, desc = parts
+            context.user_data["awaiting"] = tool
+            await query.edit_message_text(
+                f"🔁 Повторяем: _{desc}_\n\nОтправь описание (или нажми отмену):",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ Отмена", callback_data="cancel_awaiting"),
+                ]]),
+            )
         return
 
     if action == "back_to_hints":
         role_key = context.user_data.get("role", "general")
         welcome = ROLE_PROMPTS.get(role_key, ROLE_PROMPTS["general"])["welcome"]
-        await query.edit_message_text(welcome, reply_markup=hints_keyboard(role_key))
+        await query.edit_message_text(welcome, reply_markup=hints_keyboard(role_key, context))
         return
 
     if action == "tool_storyboard":
@@ -1264,33 +1446,83 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _stats_inc_tool("rewrite")
         return
 
-    # ── СОХРАНЕНИЯ ─────────────────────────────
+    # ── СОХРАНЕНИЯ — ПАПКИ ─────────────────────
 
     if action == "show_saves":
         saves = _get_saves(context)
         if not saves:
             await query.edit_message_text(
                 "💾 У тебя пока нет сохранённых работ.\n\n"
-                "После генерации сцены, монолога, раскадровки или карточки персонажа "
-                "нажми кнопку 💾 Сохранить.",
+                "После генерации нажми кнопку 💾 Сохранить.",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("◀️ Назад", callback_data="back_to_hints"),
                 ]]),
             )
             return
+        folder_counts = {}
+        for s in saves:
+            folder_counts[s["type"]] = folder_counts.get(s["type"], 0) + 1
+        folder_buttons = []
+        for ftype, flabel in SAVE_FOLDERS.items():
+            cnt = folder_counts.get(ftype, 0)
+            if cnt > 0:
+                folder_buttons.append([
+                    InlineKeyboardButton(f"{flabel} ({cnt})", callback_data=f"folder|{ftype}")
+                ])
+        folder_buttons.append([
+            InlineKeyboardButton("📤 Экспорт всех в TXT", callback_data="export_saves"),
+        ])
+        folder_buttons.append([
+            InlineKeyboardButton("◀️ Назад", callback_data="back_to_hints"),
+        ])
+        await query.edit_message_text(
+            f"💾 Твои сохранения — {len(saves)} работ\n\nВыбери папку:",
+            reply_markup=InlineKeyboardMarkup(folder_buttons),
+        )
+        return
 
-        lines = ["💾 Твои сохранённые работы:\n"]
-        for i, s in enumerate(saves, 1):
-            label = SAVE_TYPE_LABELS.get(s["type"], s["type"])
-            lines.append(f"{i}. {label} — {s['title']}")
-
-        lines.append("\nОтправь номер (например: 1) чтобы получить работу.")
+    if action.startswith("folder|"):
+        folder_type = action.split("|", 1)[1]
+        saves = _get_saves(context)
+        folder_saves = [s for s in saves if s["type"] == folder_type]
+        if not folder_saves:
+            await query.answer("Папка пуста", show_alert=False)
+            return
+        flabel = SAVE_FOLDERS.get(folder_type, folder_type)
+        lines = [f"{flabel}\n"]
+        for i, s in enumerate(folder_saves, 1):
+            lines.append(f"{i}. {s['title']}")
+        lines.append("\nОтправь номер чтобы получить работу.")
         context.user_data["awaiting"] = "view_save"
+        context.user_data["view_save_folder"] = folder_type
         await query.edit_message_text(
             "\n".join(lines),
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("◀️ Назад", callback_data="back_to_hints"),
+                InlineKeyboardButton("◀️ К папкам", callback_data="show_saves"),
             ]]),
+        )
+        return
+
+    if action == "export_saves":
+        saves = _get_saves(context)
+        if not saves:
+            await query.answer("Нет сохранений для экспорта", show_alert=True)
+            return
+        await query.answer("⏳ Готовлю файл...", show_alert=False)
+        lines = ["КИСЛОРОД ПРОДАКШЕН — Мои сохранённые работы\n", "=" * 40 + "\n"]
+        for i, s in enumerate(saves, 1):
+            label = SAVE_TYPE_LABELS.get(s["type"], s["type"])
+            lines.append(f"\n{i}. {label}: {s['title']}\n")
+            lines.append("-" * 30 + "\n")
+            lines.append(s["content"] + "\n")
+        import io
+        bio = io.BytesIO("\n".join(lines).encode("utf-8"))
+        bio.name = "kislorod_saves.txt"
+        await context.bot.send_document(
+            chat_id=query.message.chat_id,
+            document=bio,
+            filename="kislorod_saves.txt",
+            caption=f"📤 Все твои сохранения — {len(saves)} работ",
         )
         return
 
@@ -1300,18 +1532,22 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = action.split("|", 2)
         if len(parts) == 3:
             _, save_type, title = parts
-            # Текст последнего ответа бота сохраняем из истории
             history = context.user_data.get("history", [])
             content = ""
             for msg in reversed(history):
                 if msg["role"] == "assistant":
                     content = msg["text"]
                     break
-            # Если история пустая — сохраняем заголовок как заглушку
             if not content:
                 content = f"[{title}]"
             _add_save(context, save_type, title, content)
-            await query.answer("✅ Сохранено!", show_alert=False)
+            label = SAVE_TYPE_LABELS.get(save_type, save_type)
+            # ✅ Подтверждение с названием и счётчиком
+            count = _saves_count(context)
+            await query.answer(
+                f"✅ Сохранено в {label}!\n«{title[:40]}»\nВсего сохранений: {count}",
+                show_alert=True,
+            )
         return
 
     # ── УПРАВЛЕНИЕ ─────────────────────────────
@@ -1385,7 +1621,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if role_key and role_key in ROLE_PROMPTS:
             await query.edit_message_text(
                 ROLE_PROMPTS[role_key]["welcome"] + "\n\n✅ История очищена",
-                reply_markup=hints_keyboard(role_key),
+                reply_markup=hints_keyboard(role_key, context),
             )
         else:
             await query.answer("История очищена ✅", show_alert=True)
@@ -1400,7 +1636,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _stats_inc_role(role_key)
         await query.edit_message_text(
             ROLE_PROMPTS[role_key]["welcome"],
-            reply_markup=hints_keyboard(role_key),
+            reply_markup=hints_keyboard(role_key, context),
         )
         return
 
@@ -1437,7 +1673,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["history"] = history[-30:]
         _stats["total_messages"] += 1
 
-        kb = hints_keyboard(role_key)
+        kb = hints_keyboard(role_key, context)
         await context.bot.send_message(chat_id=chat_id, text=response, reply_markup=kb)
         return
 
@@ -1478,16 +1714,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Просмотр сохранения по номеру
     if awaiting == "view_save":
         context.user_data.pop("awaiting", None)
+        folder_type = context.user_data.pop("view_save_folder", None)
         saves = _get_saves(context)
+        # Фильтруем по папке если задана
+        display_saves = [s for s in saves if s["type"] == folder_type] if folder_type else saves
         try:
             idx = int(user_text.strip()) - 1
-            if 0 <= idx < len(saves):
-                s = saves[idx]
+            if 0 <= idx < len(display_saves):
+                s = display_saves[idx]
                 label = SAVE_TYPE_LABELS.get(s["type"], s["type"])
                 role_key = context.user_data.get("role", "general")
                 await update.message.reply_text(
                     f"{label}: {s['title']}\n\n{s['content']}",
-                    reply_markup=hints_keyboard(role_key),
+                    reply_markup=hints_keyboard(role_key, context),
                 )
             else:
                 await update.message.reply_text("Нет сохранения с таким номером.")
@@ -1562,7 +1801,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     history.append({"role": "assistant", "text": response})
     context.user_data["history"] = history[-30:]
-    await update.message.reply_text(response, reply_markup=hints_keyboard(role_key))
+    await update.message.reply_text(response, reply_markup=hints_keyboard(role_key, context))
 
 
 # ─────────────────────────────────────────────
@@ -1588,7 +1827,9 @@ async def storyboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def _generate_storyboard(update: Update, context: ContextTypes.DEFAULT_TYPE, scene: str):
     chat_id = update.effective_chat.id
-    await context.bot.send_message(chat_id=chat_id, text="⏳ Генерирую раскадровку (~15 сек)...")
+    _add_to_history(context, "storyboard", scene)
+
+    progress_id = await send_progress(context.bot, chat_id, "🎬 Генерирую раскадровку...")
 
     system = (
         "Ты — опытный режиссёр и раскадровщик. "
@@ -1617,10 +1858,11 @@ async def _generate_storyboard(update: Update, context: ContextTypes.DEFAULT_TYP
         except asyncio.CancelledError:
             pass
 
+    await delete_progress(context.bot, chat_id, progress_id)
+
     if not response or response.startswith("⚠️"):
         response = "Не удалось сгенерировать раскадровку. Попробуй снова."
 
-    # Сохраняем в историю для последующего сохранения
     history = context.user_data.get("history", [])
     history.append({"role": "assistant", "text": response})
     context.user_data["history"] = history[-30:]
@@ -1658,7 +1900,8 @@ async def character_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _generate_character(update: Update, context: ContextTypes.DEFAULT_TYPE, description: str):
     chat_id = update.effective_chat.id
-    await context.bot.send_message(chat_id=chat_id, text="⏳ Создаю карточку персонажа (~15 сек)...")
+    _add_to_history(context, "character", description)
+    progress_id = await send_progress(context.bot, chat_id, "🎭 Создаю карточку персонажа...")
 
     system = (
         "Ты — опытный сценарист и актёрский педагог. "
@@ -1683,6 +1926,8 @@ async def _generate_character(update: Update, context: ContextTypes.DEFAULT_TYPE
             await typing_task
         except asyncio.CancelledError:
             pass
+
+    await delete_progress(context.bot, chat_id, progress_id)
 
     if not response or response.startswith("⚠️"):
         response = "Не удалось создать карточку. Попробуй снова."
@@ -1724,7 +1969,8 @@ async def scene_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _generate_scene(update: Update, context: ContextTypes.DEFAULT_TYPE, description: str):
     chat_id = update.effective_chat.id
-    await context.bot.send_message(chat_id=chat_id, text="⏳ Пишу сцену (~15 сек)...")
+    _add_to_history(context, "scene", description)
+    progress_id = await send_progress(context.bot, chat_id, "📝 Пишу сцену...")
 
     system = (
         "Ты — профессиональный сценарист студии КИСЛОРОД ПРОДАКШЕН. "
@@ -1748,6 +1994,8 @@ async def _generate_scene(update: Update, context: ContextTypes.DEFAULT_TYPE, de
             await typing_task
         except asyncio.CancelledError:
             pass
+
+    await delete_progress(context.bot, chat_id, progress_id)
 
     if not response or response.startswith("⚠️"):
         response = "Не удалось написать сцену. Попробуй снова."
@@ -1790,7 +2038,8 @@ async def monologue_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _generate_monologue(update: Update, context: ContextTypes.DEFAULT_TYPE, description: str):
     chat_id = update.effective_chat.id
-    await context.bot.send_message(chat_id=chat_id, text="⏳ Пишу монолог (~15 сек)...")
+    _add_to_history(context, "monologue", description)
+    progress_id = await send_progress(context.bot, chat_id, "🎤 Пишу монолог...")
 
     system = (
         "Ты — опытный сценарист и актёрский педагог студии КИСЛОРОД ПРОДАКШЕН. "
@@ -1814,6 +2063,8 @@ async def _generate_monologue(update: Update, context: ContextTypes.DEFAULT_TYPE
             await typing_task
         except asyncio.CancelledError:
             pass
+
+    await delete_progress(context.bot, chat_id, progress_id)
 
     if not response or response.startswith("⚠️"):
         response = "Не удалось написать монолог. Попробуй снова."
@@ -1851,7 +2102,8 @@ async def rewrite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _generate_rewrite(update, context, original_text, style):
     chat_id = update.effective_chat.id
-    await context.bot.send_message(chat_id=chat_id, text=f"⏳ Переписываю в стиле «{style}» (~15 сек)...")
+    _add_to_history(context, "rewrite", f"{style}: {original_text[:30]}")
+    progress_id = await send_progress(context.bot, chat_id, f"🔁 Переписываю в стиле «{style}»...")
 
     system = (
         "Ты — профессиональный сценарист студии КИСЛОРОД ПРОДАКШЕН. "
@@ -1875,6 +2127,8 @@ async def _generate_rewrite(update, context, original_text, style):
             await typing_task
         except asyncio.CancelledError:
             pass
+
+    await delete_progress(context.bot, chat_id, progress_id)
 
     if not response or response.startswith("⚠️"):
         response = "Не удалось переписать. Попробуй снова."
@@ -1910,15 +2164,23 @@ async def saves_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "После генерации нажми кнопку 💾 Сохранить."
         )
         return
-
-    lines = ["💾 Твои сохранённые работы:\n"]
-    for i, s in enumerate(saves, 1):
-        label = SAVE_TYPE_LABELS.get(s["type"], s["type"])
-        lines.append(f"{i}. {label} — {s['title']}")
-
-    lines.append("\nОтправь номер (например: 1) чтобы получить работу.")
-    context.user_data["awaiting"] = "view_save"
-    await update.message.reply_text("\n".join(lines))
+    folder_counts = {}
+    for s in saves:
+        folder_counts[s["type"]] = folder_counts.get(s["type"], 0) + 1
+    folder_buttons = []
+    for ftype, flabel in SAVE_FOLDERS.items():
+        cnt = folder_counts.get(ftype, 0)
+        if cnt > 0:
+            folder_buttons.append([
+                InlineKeyboardButton(f"{flabel} ({cnt})", callback_data=f"folder|{ftype}")
+            ])
+    folder_buttons.append([
+        InlineKeyboardButton("📤 Экспорт всех в TXT", callback_data="export_saves"),
+    ])
+    await update.message.reply_text(
+        f"💾 Твои сохранения — {len(saves)} работ\n\nВыбери папку:",
+        reply_markup=InlineKeyboardMarkup(folder_buttons),
+    )
 
 
 # ─────────────────────────────────────────────
