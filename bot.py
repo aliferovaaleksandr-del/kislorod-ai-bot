@@ -34,8 +34,7 @@ CHANNEL_ACTOR = "@actorsashapotapovv"
 
 WEBAPP_URL = "https://aliferovaaleksandr-del.github.io/kislorod-ai-bot/menu.html"
 
-ADMIN_IDS = {8780881836}
-
+ADMIN_IDS = {380171031}
 # ─────────────────────────────────────────────
 # ГЛОБАЛЬНАЯ СТАТИСТИКА
 # ─────────────────────────────────────────────
