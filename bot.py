@@ -28,13 +28,15 @@ YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 KINOPOISK_API_KEY = os.getenv("KINOPOISK_API_KEY")
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "29f8af604fmsh7f2433154c9fb3dp1c9f6ajsnf6ab497a500d")
 
 CHANNEL_KISLOROD = "@realtimeproductionn"
 CHANNEL_ACTOR = "@actorsashapotapovv"
 
 WEBAPP_URL = "https://aliferovaaleksandr-del.github.io/kislorod-ai-bot/menu.html"
 
-ADMIN_IDS = {380171031}
+ADMIN_IDS = {8780881836}
+
 # ─────────────────────────────────────────────
 # ГЛОБАЛЬНАЯ СТАТИСТИКА
 # ─────────────────────────────────────────────
@@ -67,7 +69,7 @@ def admin_only(func):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         if user_id not in ADMIN_IDS:
-            await update.message.reply_text(f"⛔ Нет доступа. Ваш ID: {user_id}")
+            await update.message.reply_text("⛔ У вас нет доступа к этой команде.")
             logger.warning(f"Попытка доступа к admin-команде от user_id={user_id}")
             return
         return await func(update, context)
@@ -386,6 +388,7 @@ ROLE_PROMPTS = {
 # ─────────────────────────────────────────────
 # NEWSAPI
 # ─────────────────────────────────────────────
+
 KISLOROD_QUERIES = [
     "кино фильм премьера",
     "режиссёр съёмки кинофестиваль",
@@ -393,12 +396,6 @@ KISLOROD_QUERIES = [
     "актёр кастинг роль",
     "сериал продакшен производство",
     "реклама клип видео продакшен",
-    "премьера фильм 2026",
-    "новый сериал 2026 2027",
-    "мультфильм анимация 2026",
-    "блокбастер премьера 2026",
-    "российское кино новинка 2026",
-    "Netflix сериал премьера 2026",
 ]
 
 ACTOR_QUERIES = [
@@ -408,9 +405,6 @@ ACTOR_QUERIES = [
     "кастинг роль российское кино",
     "звезда кино интервью",
     "фестиваль кино наград",
-    "актёр роль фильм 2026",
-    "российский актёр кино 2026",
-    "актёр награда премия 2026",
 ]
 
 _kislorod_query_index = 0
@@ -2252,6 +2246,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/scene          — Написать сцену 📝\n"
         "/monologue      — Монолог для актёра 🎤\n"
         "/rewrite        — Переписать в другом стиле 🔁\n"
+        "/streaming      — Где смотреть фильм 🍿\n"
         "/help           — Справка\n"
     )
 
@@ -2380,6 +2375,172 @@ async def myfilm_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 # ─────────────────────────────────────────────
+# STREAMING AVAILABILITY (RapidAPI)
+# ─────────────────────────────────────────────
+
+STREAMING_NAMES = {
+    "netflix":        "Netflix",
+    "prime":          "Amazon Prime Video",
+    "appletv":        "Apple TV+",
+    "disney":         "Disney+",
+    "hbo":            "HBO Max",
+    "hulu":           "Hulu",
+    "peacock":        "Peacock",
+    "paramount":      "Paramount+",
+    "mubi":           "MUBI",
+    "curiosity":      "Curiosity Stream",
+    "ivi":            "IVI",
+    "okko":           "Okko",
+    "kinopoisk":      "Кинопоиск HD",
+    "more":           "MORE.TV",
+    "start":          "START",
+    "wink":           "Wink",
+}
+
+
+async def fetch_streaming_info(title: str) -> dict:
+    """Ищет фильм/сериал через Streaming Availability API и возвращает данные."""
+    headers = {
+        "x-rapidapi-host": "streaming-availability.p.rapidapi.com",
+        "x-rapidapi-key": RAPIDAPI_KEY,
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            # Поиск по названию
+            search_resp = await client.get(
+                "https://streaming-availability.p.rapidapi.com/shows/search/title",
+                headers=headers,
+                params={"title": title, "country": "ru", "show_type": "all", "output_language": "ru"},
+            )
+            if search_resp.status_code != 200:
+                logger.error(f"Streaming API search error {search_resp.status_code}: {search_resp.text[:200]}")
+                return {}
+
+            results = search_resp.json()
+            if not results:
+                return {}
+
+            show = results[0]  # берём первый результат
+
+            show_id    = show.get("id", "")
+            show_type  = show.get("showType", "movie")  # movie / series
+            title_ru   = show.get("title", title)
+            title_orig = show.get("originalTitle", "")
+            year       = show.get("releaseYear", "")
+            overview   = show.get("overview", "")
+            poster_url = (show.get("imageSet") or {}).get("verticalPoster", {}).get("w480", "") or \
+                         (show.get("imageSet") or {}).get("horizontalPoster", {}).get("w480", "")
+            rating     = show.get("rating", "")
+
+            # Стриминги для России
+            streaming_options = show.get("streamingOptions", {}).get("ru", [])
+            services = []
+            seen = set()
+            for opt in streaming_options:
+                service_id   = (opt.get("service") or {}).get("id", "")
+                service_name = STREAMING_NAMES.get(service_id, service_id.capitalize())
+                stream_type  = opt.get("type", "")   # subscription / rent / buy / free
+                link         = opt.get("link", "")
+                if service_id and service_id not in seen:
+                    seen.add(service_id)
+                    type_label = {"subscription": "подписка", "rent": "аренда",
+                                  "buy": "покупка", "free": "бесплатно"}.get(stream_type, stream_type)
+                    services.append({"name": service_name, "type": type_label, "link": link})
+
+            return {
+                "id":         show_id,
+                "type":       show_type,
+                "title":      title_ru,
+                "orig_title": title_orig,
+                "year":       year,
+                "overview":   overview,
+                "poster":     poster_url,
+                "rating":     rating,
+                "services":   services,
+            }
+
+    except Exception as e:
+        logger.error(f"fetch_streaming_info error: {e}")
+        return {}
+
+
+def _format_streaming_post(info: dict) -> str:
+    """Форматирует пост о стриминге для Telegram."""
+    type_emoji = "🎬" if info["type"] == "movie" else "📺"
+    title_line = f"{type_emoji} *{info['title']}*"
+    if info.get("orig_title") and info["orig_title"] != info["title"]:
+        title_line += f" / _{info['orig_title']}_"
+    if info.get("year"):
+        title_line += f" ({info['year']})"
+
+    lines = [title_line]
+
+    if info.get("rating"):
+        lines.append(f"⭐ Рейтинг: {info['rating']}/100")
+
+    if info.get("overview"):
+        overview = info["overview"][:300]
+        if len(info["overview"]) > 300:
+            overview += "..."
+        lines.append(f"\n📝 {overview}")
+
+    if info["services"]:
+        lines.append("\n🇷🇺 *Где смотреть в России:*")
+        for svc in info["services"]:
+            link_part = f" — [смотреть]({svc['link']})" if svc.get("link") else ""
+            lines.append(f"  • {svc['name']} ({svc['type']}){link_part}")
+    else:
+        lines.append("\n❌ В российских стриминговых сервисах не найдено")
+
+    lines.append("\n#стриминг #кино #кислородпродакшен")
+    return "\n".join(lines)
+
+
+async def streaming_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /streaming <название фильма или сериала>
+    Ищет, где смотреть в России, отвечает пользователю и постит в оба канала.
+    """
+    query_title = " ".join(context.args).strip() if context.args else ""
+    if not query_title:
+        await update.message.reply_text(
+            "🎬 Использование:\n/streaming <название>\n\nПример: /streaming Дюна"
+        )
+        return
+
+    await update.message.reply_text(f"🔍 Ищу «{query_title}»...")
+
+    info = await fetch_streaming_info(query_title)
+
+    if not info:
+        await update.message.reply_text(
+            f"❌ Фильм или сериал «{query_title}» не найден.\n"
+            "Попробуй написать название на английском."
+        )
+        return
+
+    post_text = _format_streaming_post(info)
+    poster    = info.get("poster", "")
+
+    # 1. Ответить пользователю
+    try:
+        if poster:
+            await update.message.reply_photo(photo=poster, caption=post_text, parse_mode="Markdown")
+        else:
+            await update.message.reply_text(post_text, parse_mode="Markdown")
+    except Exception as e:
+        logger.warning(f"streaming reply error: {e}")
+        await update.message.reply_text(post_text, parse_mode="Markdown")
+
+    # 2. Опубликовать в оба канала
+    await send_post(context.bot, CHANNEL_KISLOROD, post_text, poster)
+    await send_post(context.bot, CHANNEL_ACTOR,    post_text, poster)
+
+    await update.message.reply_text("✅ Пост опубликован в оба канала!")
+
+
+# ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
 
@@ -2390,6 +2551,7 @@ def main():
     logger.info(f"YANDEX_FOLDER_ID:  {YANDEX_FOLDER_ID         or  '❌ НЕ ЗАДАН'}")
     logger.info(f"NEWS_API_KEY:      {'✅' if NEWS_API_KEY      else '❌ НЕ ЗАДАН'}")
     logger.info(f"KINOPOISK_API_KEY: {'✅' if KINOPOISK_API_KEY else '❌ НЕ ЗАДАН'}")
+    logger.info(f"RAPIDAPI_KEY:      {'✅' if RAPIDAPI_KEY      else '❌ НЕ ЗАДАН'}")
     logger.info(f"ADMIN_IDS:         {ADMIN_IDS}")
 
     app = Application.builder().token(BOT_TOKEN).build()
@@ -2404,6 +2566,7 @@ def main():
     app.add_handler(CommandHandler("scene",        scene_command))
     app.add_handler(CommandHandler("monologue",    monologue_command))
     app.add_handler(CommandHandler("rewrite",      rewrite_command))
+    app.add_handler(CommandHandler("streaming",    streaming_command))
 
     # Только для администратора
     app.add_handler(CommandHandler("stats",        stats_command))
