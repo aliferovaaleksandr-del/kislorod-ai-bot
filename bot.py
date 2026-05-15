@@ -942,13 +942,102 @@ async def generate_hf_image(prompt: str) -> bytes | None:
         "Authorization": f"Bearer {HF_TOKEN}",
         "Content-Type": "application/json",
     }
+    # ── Стили генерации ──────────────────────────────────────────
+    # Меняй IMAGE_STYLE чтобы переключить стиль постеров:
+    #   "cinematic"  — реалистичное кино (по умолчанию)
+    #   "pixar"      — Pixar / Disney 3D мультяшный
+    #   "comic"      — стиль комикса / Marvel
+    #   "anime"      — аниме / Studio Ghibli
+    #   "watercolor" — акварель / рисованный арт
+    IMAGE_STYLE = os.getenv("IMAGE_STYLE", "pixar")
+
+    STYLE_PRESETS = {
+        "cinematic": {
+            "suffix": (
+                ", sharp focus on faces, highly detailed facial features, "
+                "photorealistic skin texture, ultra detailed eyes, "
+                "professional cinema photography, dramatic lighting, "
+                "8k resolution, film grain, anamorphic lens"
+            ),
+            "negative": (
+                "blurry face, deformed face, ugly, bad anatomy, "
+                "blurry eyes, disfigured, low quality, watermark, text"
+            ),
+            "guidance": 4.5,
+            "steps": 45,
+        },
+        "pixar": {
+            "suffix": (
+                ", Pixar 3D animation style, Disney Pixar movie, "
+                "highly detailed 3D render, expressive cartoon faces, "
+                "vibrant colors, subsurface scattering skin, "
+                "studio lighting, cinematic composition, 8k render, "
+                "Pixar studio quality, smooth 3D character design"
+            ),
+            "negative": (
+                "realistic photo, blurry, deformed, ugly, "
+                "low quality, watermark, text, 2D flat"
+            ),
+            "guidance": 5.0,
+            "steps": 45,
+        },
+        "comic": {
+            "suffix": (
+                ", Marvel comic book art style, bold ink outlines, "
+                "dynamic comic panel composition, vivid saturated colors, "
+                "Ben-Day dots shading, superhero poster art, "
+                "Jack Kirby style, professional comic illustration, "
+                "sharp clean lines, dramatic perspective"
+            ),
+            "negative": (
+                "photo realistic, blurry, deformed, ugly, "
+                "low quality, watermark, pencil sketch, unfinished"
+            ),
+            "guidance": 5.5,
+            "steps": 40,
+        },
+        "anime": {
+            "suffix": (
+                ", Studio Ghibli anime style, beautiful anime art, "
+                "detailed anime faces, large expressive eyes, "
+                "soft cel shading, vibrant anime colors, "
+                "Hayao Miyazaki style, professional anime illustration, "
+                "cinematic anime composition"
+            ),
+            "negative": (
+                "realistic photo, blurry, deformed, ugly, "
+                "low quality, watermark, text, 3D render"
+            ),
+            "guidance": 5.0,
+            "steps": 40,
+        },
+        "watercolor": {
+            "suffix": (
+                ", beautiful watercolor painting, loose brushstrokes, "
+                "soft color washes, artistic illustration, "
+                "professional concept art, painterly texture, "
+                "warm palette, editorial illustration style"
+            ),
+            "negative": (
+                "photo realistic, blurry, deformed, ugly, "
+                "low quality, watermark, text, digital art"
+            ),
+            "guidance": 4.0,
+            "steps": 40,
+        },
+    }
+
+    style = STYLE_PRESETS.get(IMAGE_STYLE, STYLE_PRESETS["pixar"])
+    enhanced_prompt = prompt + style["suffix"]
+
     payload = {
-        "inputs": prompt,
+        "inputs": enhanced_prompt,
         "parameters": {
-            "guidance_scale": 3.5,
-            "num_inference_steps": 35,
+            "guidance_scale": style["guidance"],
+            "num_inference_steps": style["steps"],
             "width": 768,
             "height": 1024,
+            "negative_prompt": style["negative"],
         },
     }
 
