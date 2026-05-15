@@ -1720,26 +1720,126 @@ _poster_theme_index = 0
 # ─────────────────────────────────────────────
 
 FUNNY_FILM_IDEAS = [
-    ("Титаник", "Джек выжил, потому что взял доску побольше. История о том, как правильная логистика спасает жизни."),
-    ("Терминатор", "Он прилетел из будущего не убивать — а починить Wi-Fi. И сделал это за 3 минуты."),
-    ("Король Лев", "Симба не вернулся в Прайд-Рок. Он открыл стартап и нанял гиен HR-менеджерами."),
-    ("Властелин колец", "Кольцо всевластия просто потерялось в ИКЕА в отделе декора. Фродо нашёл его на кассе."),
-    ("Матрица", "Нео взял синюю таблетку. Фильм длится 3 минуты."),
-    ("Звёздные войны", "Дарт Вейдер оказался просто папой с проблемами коммуникации. Семейный психолог помог бы всем."),
-    ("Один дома", "Кевин просто заказал пиццу и позвонил в полицию. Хронометраж: 8 минут."),
-    ("Назад в будущее", "Марти вернулся в прошлое и просто купил акции Apple. Дальше скучно."),
-    ("Гарри Поттер", "Гермиона решила все проблемы в первой главе. Книга — одна."),
-    ("Человек-паук", "Питер Паркер использовал паутину для уборки квартиры. Стал блогером."),
-    ("Форрест Гамп", "Форрест остановился бежать и объяснил зачем. Никто не понял."),
-    ("Джуrassic Park", "Динозавры убежали в IKEA и не смогли выбраться из зоны касс."),
-    ("Аватар", "Джейк Салли просто купил синюю краску. Дешевле и быстрее."),
-    ("Интерстеллар", "Купер вышел через другую дверь. Всё нормально."),
-    ("Бойцовский клуб", "Первое правило: рассказывать всем. Так и сделал."),
-    ("Молчание ягнят", "Ганнибал Лектер стал поваром кулинарного шоу. Рейтинги взлетели."),
-    ("Побег из Шоушенка", "Энди просто нанял хорошего адвоката. Вышел на второй год."),
-    ("Криминальное чтиво", "Все поговорили и разошлись. Кофе был хорош."),
-    ("Достать ножи", "Детектив Бланк просто прочитал завещание сразу. Конец."),
-    ("Хоббит", "Бильбо сказал «нет» и лёг спать. Приключений не случилось."),
+    (
+        "Титаник",
+        "«Доска на двоих»",
+        "Роза подвинулась. Джек выжил. Фильм закончился на 40-й минуте.",
+        "Romantic movie poster parody: a giant wooden door floating in icy ocean, two people comfortably lying on it with blankets and mugs of tea, smiling. Classic Titanic ship in background. Absurd comedy style, cinematic lighting, film poster composition."
+    ),
+    (
+        "Терминатор",
+        "«Терминатор: Техподдержка»",
+        "Он прилетел из будущего. Но не убивать — а починить Wi-Fi. Роутер оказался сложнее Сары Коннор.",
+        "Funny movie poster parody: muscular cyborg Terminator in sunglasses sitting at a help desk, holding a router, talking on phone with frustrated expression, office background with sticky notes. Comedy movie poster style, dramatic lighting."
+    ),
+    (
+        "Король Лев",
+        "«Симба: Стартап»",
+        "Симба не вернулся мстить. Он открыл IT-стартап в Найроби. Шрам стал его инвестором.",
+        "Funny animated movie poster parody: lion cub in business suit at a laptop in a savanna office, PowerPoint presentation on a rock screen, hyenas in HR badges nearby. Comedy Pixar-style poster, bright colors, cinematic."
+    ),
+    (
+        "Властелин колец",
+        "«Одно кольцо: Утеряно»",
+        "Гэндальф просто написал объявление на доску в таверне. Нашли за три дня. Квест отменён.",
+        "Funny fantasy movie poster parody: wizard pinning a 'Lost Ring' flyer on a medieval tavern bulletin board. Dramatic lighting, epic landscape in background, comedy style, cinematic film poster composition."
+    ),
+    (
+        "Матрица",
+        "«Нео берёт синюю»",
+        "Нео выбрал синюю таблетку. Проснулся. Выпил кофе. Пошёл на работу. Конец.",
+        "Funny sci-fi movie poster parody: office worker in suit choosing between red and blue pill, picks blue, background shows boring office cubicles instead of matrix code. Deadpan comedy style, film poster composition."
+    ),
+    (
+        "Звёздные войны",
+        "«Папа с проблемами»",
+        "Дарт Вейдер просто хотел сказать Люку что он его папа. Но дозвониться не мог — сигнал в космосе плохой.",
+        "Funny Star Wars parody movie poster: Darth Vader holding a phone with 'No Signal' on screen, frustrated expression under the helmet. Death Star in background. Comedy style, cinematic epic lighting, film poster."
+    ),
+    (
+        "Один дома",
+        "«Кевин звонит 112»",
+        "8-летний Кевин нашёл телефон и позвонил в полицию. Грабители арестованы через 12 минут. Хронометраж фильма: 14 минут.",
+        "Funny Christmas movie poster parody: smart kid on phone calling police, two bumbling robbers already in handcuffs visible through window, Christmas decorations everywhere. Comedy style, warm holiday lighting, film poster."
+    ),
+    (
+        "Назад в будущее",
+        "«Марти инвестирует»",
+        "Марти вернулся в 1955 и вложил $100 в акции будущих компаний. В 1985 году он оказался богаче Биффа.",
+        "Funny sci-fi movie poster parody: teenager in time-traveling DeLorean reading a stock market newspaper with huge grin, dollar signs flying around. Comedy style, 80s retro film poster, cinematic lighting."
+    ),
+    (
+        "Гарри Поттер",
+        "«Гермиона решает всё»",
+        "Гермиона прочитала все книги в библиотеке Хогвартса ещё в сентябре. Волдеморт побеждён к Рождеству. Дальше 7 скучных книг про экзамены.",
+        "Funny magic school movie poster parody: clever girl with huge stack of books, wand in one hand, checklist in other, defeated villain small in background. Comedy Harry Potter parody style, magical lighting, film poster."
+    ),
+    (
+        "Интерстеллар",
+        "«Купер выходит через другую дверь»",
+        "Купер искал спасение человечества среди звёзд. А потом заметил запасный выход прямо за фермой. Всё было нормально.",
+        "Funny sci-fi movie poster parody: astronaut in spacesuit finding a mundane 'Emergency Exit' door in the middle of a cornfield in space, pointing at it with relief. Comedy style, dramatic space lighting, cinematic film poster."
+    ),
+    (
+        "Джурасик Парк",
+        "«Динозавры в IKEA»",
+        "Динозавры сбежали с острова и забрели в ближайший торговый центр. В зоне самовывоза IKEA их поймали — они не смогли найти выход.",
+        "Funny movie poster parody: T-Rex and raptors confused inside IKEA store, carrying flat-pack boxes, staff hiding behind displays. Comedy style, bright commercial lighting, absurd humor, film poster composition."
+    ),
+    (
+        "Аватар",
+        "«Синяя краска»",
+        "Джейк Салли потратил $20 на синюю краску в строительном магазине. Стал своим среди На'ви на второй день.",
+        "Funny sci-fi movie poster parody: human man painted bright blue with a paint roller still in hand, standing proudly among tall blue aliens who look confused. Comedy style, lush jungle background, cinematic lighting."
+    ),
+    (
+        "Бойцовский клуб",
+        "«Первое правило — рассказать всем»",
+        "Первое правило Бойцовского клуба — никому не рассказывать. Тайлер рассказал всем в первый же вечер. Клуб закрылся.",
+        "Funny thriller movie poster parody: man on stage with microphone at a crowded press conference titled 'Fight Club Open Meeting', audience clapping, news cameras everywhere. Comedy parody style, dramatic lighting, film poster."
+    ),
+    (
+        "Молчание ягнят",
+        "«Ганнибал: Кулинарное шоу»",
+        "Ганнибал Лектер получил собственное кулинарное шоу на телевидении. Рейтинги — лучшие в истории канала. Никто не задаёт лишних вопросов.",
+        "Funny thriller parody movie poster: elegant man in chef's hat and apron in a gourmet kitchen, holding a ladle dramatically, studio audience blurred in background. Dark comedy style, dramatic lighting, film poster composition."
+    ),
+    (
+        "Побег из Шоушенка",
+        "«Хороший адвокат»",
+        "Энди Дюфресн нанял нормального адвоката в первый же день. Апелляция удовлетворена. Конец тюремной эпопеи — конец фильма.",
+        "Funny drama movie poster parody: innocent man in prison clothes shaking hands with a confident lawyer in expensive suit, prison gate opening dramatically behind them. Comedy style, hopeful lighting, film poster."
+    ),
+    (
+        "Форрест Гамп",
+        "«Форрест останавливается»",
+        "Форрест бежал три года. Потом остановился и попытался объяснить зачем. Никто из бегущих рядом так и не понял.",
+        "Funny drama movie poster parody: man in running shoes stopping mid-run with confused expression, crowd of runners crashing into him from behind. Comedy style, open road background, cinematic lighting, film poster."
+    ),
+    (
+        "Хоббит",
+        "«Бильбо отказывается»",
+        "Гэндальф пришёл звать Бильбо в приключение. Бильбо сказал нет, закрыл дверь и лёг спать. Кольцо нашли другие. Всё обошлось.",
+        "Funny fantasy movie poster parody: old wizard knocking on a round hobbit door, door slammed shut with 'Do Not Disturb' sign, cozy hobbit hole with smoke from chimney. Comedy style, Shire landscape, cinematic lighting, film poster."
+    ),
+    (
+        "Достать ножи",
+        "«Детектив читает завещание»",
+        "Детектив Бланк сразу попросил зачитать завещание вслух. Все присутствующие оказались виновны. Дело закрыто за 20 минут.",
+        "Funny mystery movie poster parody: sharp detective pointing dramatically at a will document while suspects look caught, mansion background. Comedy whodunit style, dramatic lighting, film poster composition."
+    ),
+    (
+        "Криминальное чтиво",
+        "«Просто кофе»",
+        "Все персонажи Тарантино встретились в кафе, выпили кофе и разошлись. Никто никого не трогал. Просто хороший кофе.",
+        "Funny crime movie poster parody: dangerous-looking criminals sitting peacefully at a diner booth, drinking coffee, small talk, relaxed smiles. Comedy parody of Pulp Fiction style, retro diner lighting, film poster."
+    ),
+    (
+        "Мстители",
+        "«Тони чинит перчатку»",
+        "Таноса можно было победить, просто сломав перчатку заранее. Тони сделал это в мастерской за полчаса. Войны не было.",
+        "Funny superhero movie poster parody: genius inventor in workshop cheerfully breaking a golden gauntlet with a hammer, team of heroes watching confused in background. Comedy Marvel parody style, dramatic lighting, film poster."
+    ),
 ]
 
 _funny_poster_index = 0
@@ -1747,87 +1847,109 @@ _funny_poster_index = 0
 
 async def generate_funny_film_poster_idea() -> tuple[str, str, str]:
     """
-    Генерирует смешную идею постера к фильму через YandexGPT.
+    Берёт готовую идею из FUNNY_FILM_IDEAS.
     Возвращает (film_title, funny_concept, art_prompt).
     """
     global _funny_poster_index
-    film_title, concept = FUNNY_FILM_IDEAS[_funny_poster_index % len(FUNNY_FILM_IDEAS)]
+    item = FUNNY_FILM_IDEAS[_funny_poster_index % len(FUNNY_FILM_IDEAS)]
     _funny_poster_index += 1
-
-    system = (
-        "Ты — креативный арт-директор, специализирующийся на пародийных постерах к фильмам. "
-        "Создаёшь смешные концепции и промпты для генерации изображений. "
-        "Отвечай ТОЛЬКО на английском языке и ТОЛЬКО промптом для генерации изображения."
-    )
-    user_msg = (
-        f"Фильм: «{film_title}»\n"
-        f"Юмористическая концепция: {concept}\n\n"
-        "Создай промпт для генерации смешного пародийного постера к этому фильму. "
-        "Постер должен выглядеть как настоящий кинопостер, но с абсурдным юмористическим твистом. "
-        "Промпт должен быть на английском, 1-3 предложения, описывать визуал постера. "
-        "Без пояснений — только промпт."
-    )
-    art_prompt_raw = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
-    art_prompt = (
-        f"Funny parody movie poster, cinematic style, professional design, humorous twist: "
-        f"{art_prompt_raw[:300]}. Bold title typography space at top, film poster composition."
-    )
-    return film_title, concept, art_prompt
+    film_title, funny_title, concept, art_prompt_base = item
+    art_prompt = art_prompt_base + " High quality, award-winning cinematography, dramatic poster lighting."
+    return film_title, f"{funny_title}\n\n{concept}", art_prompt
 
 
 async def generate_funny_poster_caption(film_title: str, concept: str) -> str:
     """Генерирует смешной текст поста для пародийного постера."""
     system = (
-        "Ты — остроумный редактор Telegram-канала о кино. "
-        "Пишешь смешные посты о кино. Отвечай ТОЛЬКО текстом поста."
+        "Ты — остроумный сценарист и редактор Telegram-канала о кино с чувством юмора как у стендап-комика. "
+        "Пишешь короткие, едкие, смешные посты. Юмор абсурдный, ироничный, с неожиданными деталями. "
+        "Никаких банальностей. Отвечай ТОЛЬКО текстом поста, без пояснений."
     )
     user_msg = (
         f"Напиши смешной пост для пародийного постера к фильму «{film_title}».\n\n"
-        f"Идея: {concept}\n\n"
-        "Формат:\n"
-        "🎬 [смешное название версии фильма]\n\n"
-        "[2-3 смешных предложения о сюжете этой альтернативной версии]\n\n"
-        "А вы бы посмотрели такую версию? 👇\n\n"
-        "#пародия #кино #альтернативноекино #кислородпродакшен"
+        f"Концепция: {concept}\n\n"
+        "Правила:\n"
+        "— Начни с эмодзи 🎬 и СМЕШНОГО названия этой версии фильма (придумай сам, острее чем в концепции)\n"
+        "— 3-4 предложения: опиши альтернативный сюжет с конкретными абсурдными деталями\n"
+        "— Добавь неожиданную деталь которой нет в концепции — это должно быть смешно\n"
+        "— Финальная строка: вовлекающий вопрос к подписчикам\n"
+        "— Хэштеги: #пародия #кино #еслибы #кислородпродакшен\n\n"
+        "Пример хорошего поста:\n"
+        "🎬 Титаник: Доска на двоих\n\n"
+        "Роза просто подвинулась на 30 сантиметров влево. Джек выжил, они поженились, "
+        "завели троих детей и открыли музей деревянных дверей в Саутгемптоне. "
+        "Кейт Уинслет до сих пор не может смотреть на мебель без слёз — но теперь от смеха.\n\n"
+        "А вы бы купили билет на такую версию? 👇\n\n"
+        "#пародия #кино #еслибы #кислородпродакшен"
     )
     return await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
 
 
+def compress_image(image_bytes: bytes, max_size_kb: int = 400) -> bytes:
+    """Сжимает изображение до нужного размера через Pillow."""
+    try:
+        from PIL import Image
+        import io as _io
+        img = Image.open(_io.BytesIO(image_bytes))
+        if max(img.size) > 1280:
+            img.thumbnail((1280, 1280), Image.LANCZOS)
+        for q in [85, 75, 60, 45]:
+            buf = _io.BytesIO()
+            img.save(buf, format="JPEG", quality=q, optimize=True)
+            if buf.tell() <= max_size_kb * 1024:
+                buf.seek(0)
+                return buf.read()
+        buf.seek(0)
+        return buf.read()
+    except Exception as e:
+        logger.warning(f"compress_image error: {e}")
+        return image_bytes
+
+
+async def send_photo_safe(bot, channel: str, image_bytes: bytes, caption: str) -> bool:
+    """Отправляет фото с увеличенным таймаутом и сжатием."""
+    import io
+    compressed = compress_image(image_bytes)
+    logger.info(f"Фото {len(compressed)//1024} КБ → {channel}")
+    bio = io.BytesIO(compressed)
+    bio.name = "poster.jpg"
+    try:
+        await bot.send_photo(
+            chat_id=channel,
+            photo=bio,
+            caption=caption,
+            read_timeout=60,
+            write_timeout=60,
+            connect_timeout=30,
+        )
+        return True
+    except Exception as e:
+        logger.error(f"send_photo_safe error {channel}: {e}")
+        return False
+
+
 async def job_funny_poster(context):
     """Ежедневная автогенерация смешного постера к фильму в оба канала."""
-    import io
     logger.info("Генерирую смешной постер к фильму...")
 
     film_title, concept, art_prompt = await generate_funny_film_poster_idea()
     image_bytes = await generate_yandex_art(art_prompt)
+    caption = await generate_funny_poster_caption(film_title, concept)
 
-    if image_bytes:
-        caption = await generate_funny_poster_caption(film_title, concept)
-        bio = io.BytesIO(image_bytes)
-        bio.name = "funny_poster.jpg"
-
-        for channel in [CHANNEL_KISLOROD, CHANNEL_ACTOR]:
-            try:
-                bio.seek(0)
-                await context.bot.send_photo(
-                    chat_id=channel,
-                    photo=bio,
-                    caption=caption,
-                )
+    for channel in [CHANNEL_KISLOROD, CHANNEL_ACTOR]:
+        if image_bytes:
+            ok = await send_photo_safe(context.bot, channel, image_bytes, caption)
+            if ok:
                 logger.info(f"✅ Смешной постер → {channel}")
                 _stats["posts_sent"] += 1
-            except Exception as e:
-                logger.error(f"Ошибка отправки смешного постера в {channel}: {e}")
-    else:
-        # Если YandexART недоступен — отправляем только текст
-        caption = await generate_funny_poster_caption(film_title, concept)
-        for channel in [CHANNEL_KISLOROD, CHANNEL_ACTOR]:
-            try:
-                await context.bot.send_message(chat_id=channel, text=caption)
-                logger.info(f"✅ Смешной пост (без фото) → {channel}")
-                _stats["posts_sent"] += 1
-            except Exception as e:
-                logger.error(f"Ошибка отправки в {channel}: {e}")
+                continue
+            logger.warning(f"Фото не отправилось в {channel}, пробуем текст")
+        try:
+            await context.bot.send_message(chat_id=channel, text=caption)
+            logger.info(f"✅ Смешной пост (текст) → {channel}")
+            _stats["posts_sent"] += 1
+        except Exception as e:
+            logger.error(f"Ошибка отправки текста в {channel}: {e}")
 
 
 async def job_channel_poster(context):
@@ -2947,29 +3069,27 @@ async def premiere_now_command(update: Update, context: ContextTypes.DEFAULT_TYP
 @admin_only
 async def funny_now_command(update, context):
     await update.message.reply_text("😂 Генерирую смешной постер к фильму (~60 сек)...")
-    import io
     film_title, concept, art_prompt = await generate_funny_film_poster_idea()
     image_bytes = await generate_yandex_art(art_prompt)
-    if image_bytes:
-        caption = await generate_funny_poster_caption(film_title, concept)
-        bio = io.BytesIO(image_bytes)
-        bio.name = "funny_poster.jpg"
-        for channel in [CHANNEL_KISLOROD, CHANNEL_ACTOR]:
-            try:
-                bio.seek(0)
-                await context.bot.send_photo(chat_id=channel, photo=bio, caption=caption)
-            except Exception as e:
-                logger.error(f"funny_now error {channel}: {e}")
-        await update.message.reply_text(f"✅ Смешной постер «{film_title}» опубликован в оба канала!")
-    else:
-        # Только текст если нет картинки
-        caption = await generate_funny_poster_caption(film_title, concept)
-        for channel in [CHANNEL_KISLOROD, CHANNEL_ACTOR]:
-            try:
-                await context.bot.send_message(chat_id=channel, text=caption)
-            except Exception as e:
-                logger.error(f"funny_now text error {channel}: {e}")
-        await update.message.reply_text(f"⚠️ YandexART недоступен — отправлен текст поста про «{film_title}».")
+    caption = await generate_funny_poster_caption(film_title, concept)
+    results = []
+    for channel in [CHANNEL_KISLOROD, CHANNEL_ACTOR]:
+        if image_bytes:
+            ok = await send_photo_safe(context.bot, channel, image_bytes, caption)
+            if ok:
+                results.append(f"✅ {channel}")
+                _stats["posts_sent"] += 1
+                continue
+        try:
+            await context.bot.send_message(chat_id=channel, text=caption)
+            results.append(f"📝 {channel} (текст)")
+            _stats["posts_sent"] += 1
+        except Exception as e:
+            results.append(f"❌ {channel}: {e}")
+            logger.error(f"funny_now error {channel}: {e}")
+    await update.message.reply_text(
+        f"{'✅' if image_bytes else '⚠️'} Смешной постер «{film_title}»\n" + "\n".join(results)
+    )
 
 
 @admin_only
