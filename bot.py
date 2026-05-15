@@ -29,6 +29,7 @@ YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 KINOPOISK_API_KEY = os.getenv("KINOPOISK_API_KEY")
 RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "29f8af604fmsh7f2433154c9fb3dp1c9f6ajsnf6ab497a500d")
+TMDB_API_KEY = os.getenv("TMDB_API_KEY")
 
 CHANNEL_KISLOROD = "@realtimeproductionn"
 CHANNEL_ACTOR = "@actorsashapotapovv"
@@ -836,9 +837,12 @@ def _build_streaming_post(show: dict, emoji: str, hashtags: str) -> tuple[str, s
 # ─────────────────────────────────────────────
 
 async def generate_streaming_film_post() -> tuple[str, str]:
-    """Новинка — фильм (не мультик)."""
+    """Новинка — фильм. Сначала TMDB, потом Streaming, потом GPT."""
+    if TMDB_API_KEY:
+        result = await generate_tmdb_film_post()
+        if result[0]:
+            return result
     shows = await fetch_streaming_shows_with_fallback("movie", order_by="popularity_1week")
-    # Исключаем мультфильмы
     shows = [s for s in shows if not any(
         g.get("id") in ("animation", "family") for g in (s.get("genres") or [])
     )]
@@ -848,15 +852,15 @@ async def generate_streaming_film_post() -> tuple[str, str]:
     if not show:
         return await _generate_gpt_film_post(), ""
     _used_show_ids.add(show.get("id"))
-    return _build_streaming_post(
-        show,
-        emoji="🎬",
-        hashtags="#кино #новинка #фильм #кислородпродакшен",
-    )
+    return _build_streaming_post(show, emoji="🎬", hashtags="#кино #новинка #фильм #кислородпродакшен")
 
 
 async def generate_streaming_series_post() -> tuple[str, str]:
-    """Новинка — сериал."""
+    """Новинка — сериал. Сначала TMDB, потом Streaming, потом GPT."""
+    if TMDB_API_KEY:
+        result = await generate_tmdb_series_post()
+        if result[0]:
+            return result
     shows = await fetch_streaming_shows_with_fallback("series", order_by="popularity_1week")
     if not shows:
         shows = await fetch_streaming_shows_with_fallback("series", order_by="popularity_alltime")
@@ -864,18 +868,17 @@ async def generate_streaming_series_post() -> tuple[str, str]:
     if not show:
         return await _generate_gpt_series_post(), ""
     _used_show_ids.add(show.get("id"))
-    return _build_streaming_post(
-        show,
-        emoji="📺",
-        hashtags="#сериал #новинка #стриминг #кислородпродакшен",
-    )
+    return _build_streaming_post(show, emoji="📺", hashtags="#сериал #новинка #стриминг #кислородпродакшен")
 
 
 async def generate_streaming_cartoon_post() -> tuple[str, str]:
-    """Новинка — мультфильм / анимация."""
+    """Новинка — мультфильм. Сначала TMDB, потом Streaming, потом GPT."""
+    if TMDB_API_KEY:
+        result = await generate_tmdb_cartoon_post()
+        if result[0]:
+            return result
     shows = await fetch_streaming_shows_with_fallback("movie", genres=["animation"])
     if not shows:
-        # Fallback: все фильмы, фильтруем по жанру
         all_shows = await fetch_streaming_shows_with_fallback("movie", order_by="popularity_alltime")
         shows = [s for s in all_shows if any(
             g.get("id") in ("animation", "family") for g in (s.get("genres") or [])
@@ -884,15 +887,15 @@ async def generate_streaming_cartoon_post() -> tuple[str, str]:
     if not show:
         return await _generate_gpt_cartoon_post(), ""
     _used_show_ids.add(show.get("id"))
-    return _build_streaming_post(
-        show,
-        emoji="🎨",
-        hashtags="#мультфильм #анимация #кислородпродакшен",
-    )
+    return _build_streaming_post(show, emoji="🎨", hashtags="#мультфильм #анимация #кислородпродакшен")
 
 
 async def generate_streaming_premiere_post() -> tuple[str, str]:
-    """Премьера — самое свежее по дате выхода."""
+    """Премьера. Сначала TMDB, потом Streaming, потом GPT."""
+    if TMDB_API_KEY:
+        result = await generate_tmdb_premiere_post()
+        if result[0]:
+            return result
     shows = await fetch_streaming_shows_with_fallback("movie", order_by="release_year")
     if not shows:
         shows = await fetch_streaming_shows_with_fallback("series", order_by="release_year")
@@ -900,12 +903,153 @@ async def generate_streaming_premiere_post() -> tuple[str, str]:
     if not show:
         return await _generate_gpt_film_post(), ""
     _used_show_ids.add(show.get("id"))
-    return _build_streaming_post(
-        show,
-        emoji="🔥",
-        hashtags="#премьера #новинка #кино #кислородпродакшен",
-    )
+    return _build_streaming_post(show, emoji="🔥", hashtags="#премьера #новинка #кино #кислородпродакшен")
 
+
+
+
+# ─────────────────────────────────────────────
+# TMDB API — НОВИНКИ ФИЛЬМОВ И СЕРИАЛОВ
+# ─────────────────────────────────────────────
+
+TMDB_BASE = "https://api.themoviedb.org/3"
+TMDB_IMG  = "https://image.tmdb.org/t/p/w500"
+
+_used_tmdb_ids: set = set()
+
+
+async def fetch_tmdb(endpoint: str, params: dict) -> dict:
+    """Базовый запрос к TMDB API."""
+    if not TMDB_API_KEY:
+        logger.warning("TMDB_API_KEY не задан")
+        return {}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{TMDB_BASE}{endpoint}",
+                params={"api_key": TMDB_API_KEY, "language": "ru-RU", **params},
+            )
+        logger.info(f"TMDB {endpoint} status={resp.status_code}")
+        if resp.status_code != 200:
+            logger.error(f"TMDB error {resp.status_code}: {resp.text[:200]}")
+            return {}
+        return resp.json()
+    except Exception as e:
+        logger.error(f"TMDB exception: {e}")
+        return {}
+
+
+async def fetch_tmdb_movies(genre_id: int = None, year_from: int = 2024) -> list:
+    """Популярные фильмы с фильтром по году и жанру."""
+    params = {
+        "sort_by": "popularity.desc",
+        "vote_count.gte": 50,
+        "primary_release_date.gte": f"{year_from}-01-01",
+        "with_original_language": "en|ru",
+    }
+    if genre_id:
+        params["with_genres"] = genre_id
+    data = await fetch_tmdb("/discover/movie", params)
+    return data.get("results", [])
+
+
+async def fetch_tmdb_series(genre_id: int = None, year_from: int = 2024) -> list:
+    """Популярные сериалы с фильтром по году."""
+    params = {
+        "sort_by": "popularity.desc",
+        "vote_count.gte": 30,
+        "first_air_date.gte": f"{year_from}-01-01",
+    }
+    if genre_id:
+        params["with_genres"] = genre_id
+    data = await fetch_tmdb("/discover/tv", params)
+    return data.get("results", [])
+
+
+def _pick_tmdb(items: list) -> dict:
+    """Выбирает случайный элемент, избегая повторов."""
+    random.shuffle(items)
+    for item in items:
+        if item.get("id") not in _used_tmdb_ids:
+            return item
+    _used_tmdb_ids.clear()
+    return items[0] if items else {}
+
+
+def _build_tmdb_movie_post(movie: dict, emoji: str, hashtags: str) -> tuple[str, str]:
+    """Собирает пост из объекта TMDB фильма."""
+    title     = movie.get("title") or movie.get("name") or "—"
+    orig      = movie.get("original_title") or movie.get("original_name") or ""
+    year      = (movie.get("release_date") or movie.get("first_air_date") or "")[:4]
+    overview  = (movie.get("overview") or "")[:300]
+    rating    = movie.get("vote_average", 0)
+    poster    = f"{TMDB_IMG}{movie['poster_path']}" if movie.get("poster_path") else ""
+
+    lines = [f"{emoji} *{title}*"]
+    if orig and orig != title:
+        lines[0] += f" / _{orig}_"
+    if year:
+        lines[0] += f" ({year})"
+    if rating:
+        lines.append(f"⭐ Рейтинг: {rating:.1f}/10")
+    if overview:
+        lines.append(f"\n{overview}")
+    lines.append(f"\n{hashtags}")
+
+    return "\n".join(lines), poster
+
+
+async def generate_tmdb_film_post() -> tuple[str, str]:
+    """Новинка — фильм через TMDB (не мультик)."""
+    # TMDB genre_id 16 = Animation
+    movies = await fetch_tmdb_movies(year_from=2024)
+    movies = [m for m in movies if 16 not in (m.get("genre_ids") or [])]
+    if not movies:
+        movies = await fetch_tmdb_movies(year_from=2023)
+        movies = [m for m in movies if 16 not in (m.get("genre_ids") or [])]
+    movie = _pick_tmdb(movies)
+    if not movie:
+        return await _generate_gpt_film_post(), ""
+    _used_tmdb_ids.add(movie.get("id"))
+    return _build_tmdb_movie_post(movie, "🎬", "#кино #новинка #фильм #кислородпродакшен")
+
+
+async def generate_tmdb_series_post() -> tuple[str, str]:
+    """Новинка — сериал через TMDB."""
+    series = await fetch_tmdb_series(year_from=2024)
+    if not series:
+        series = await fetch_tmdb_series(year_from=2023)
+    item = _pick_tmdb(series)
+    if not item:
+        return await _generate_gpt_series_post(), ""
+    _used_tmdb_ids.add(item.get("id"))
+    return _build_tmdb_movie_post(item, "📺", "#сериал #новинка #стриминг #кислородпродакшен")
+
+
+async def generate_tmdb_cartoon_post() -> tuple[str, str]:
+    """Новинка — мультфильм через TMDB (genre_id 16)."""
+    movies = await fetch_tmdb_movies(genre_id=16, year_from=2023)
+    if not movies:
+        movies = await fetch_tmdb_movies(genre_id=16, year_from=2020)
+    movie = _pick_tmdb(movies)
+    if not movie:
+        return await _generate_gpt_cartoon_post(), ""
+    _used_tmdb_ids.add(movie.get("id"))
+    return _build_tmdb_movie_post(movie, "🎨", "#мультфильм #анимация #кислородпродакшен")
+
+
+async def generate_tmdb_premiere_post() -> tuple[str, str]:
+    """Самая свежая премьера через TMDB."""
+    from datetime import date
+    this_year = date.today().year
+    movies = await fetch_tmdb_movies(year_from=this_year)
+    if not movies:
+        movies = await fetch_tmdb_series(year_from=this_year)
+    item = _pick_tmdb(movies)
+    if not item:
+        return await _generate_gpt_film_post(), ""
+    _used_tmdb_ids.add(item.get("id"))
+    return _build_tmdb_movie_post(item, "🔥", "#премьера #новинка #кино #кислородпродакшен")
 
 
 # ─────────────────────────────────────────────
@@ -2268,6 +2412,7 @@ def main():
     logger.info(f"YANDEX_FOLDER_ID:  {YANDEX_FOLDER_ID         or  '❌ НЕ ЗАДАН'}")
     logger.info(f"NEWS_API_KEY:      {'✅' if NEWS_API_KEY      else '❌ НЕ ЗАДАН'}")
     logger.info(f"RAPIDAPI_KEY:      {'✅' if RAPIDAPI_KEY      else '❌ НЕ ЗАДАН'}")
+    logger.info(f"TMDB_API_KEY:      {'✅' if TMDB_API_KEY       else '❌ НЕ ЗАДАН'}")
     logger.info(f"ADMIN_IDS:         {ADMIN_IDS}")
 
     app = Application.builder().token(BOT_TOKEN).build()
