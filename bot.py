@@ -1,3 +1,4 @@
+
 import os
 import asyncio
 import logging
@@ -400,8 +401,8 @@ ROLE_PROMPTS = {
 # KINOAFISHA.INFO — ПАРСЕР ПРЕМЬЕР
 # ─────────────────────────────────────────────
 
-_kinoafisha_cache: list = []
-_kinoafisha_cache_time: float = 0
+_kinoafisha_cache: dict = {}        # url -> list of movies
+_kinoafisha_cache_time: dict = {}   # url -> timestamp
 _CACHE_TTL = 3600  # обновляем кэш раз в час
 
 async def fetch_kinoafisha_premieres(url: str = "https://www.kinoafisha.info/releases/") -> list[dict]:
@@ -412,10 +413,10 @@ async def fetch_kinoafisha_premieres(url: str = "https://www.kinoafisha.info/rel
     import time as _time
     global _kinoafisha_cache, _kinoafisha_cache_time
 
-    # Возвращаем кэш если свежий
-    if _kinoafisha_cache and (_time.time() - _kinoafisha_cache_time) < _CACHE_TTL:
-        logger.info(f"kinoafisha: возвращаю кэш ({len(_kinoafisha_cache)} фильмов)")
-        return _kinoafisha_cache
+    # Возвращаем кэш если свежий (per-URL)
+    if _kinoafisha_cache.get(url) and (_time.time() - _kinoafisha_cache_time.get(url, 0)) < _CACHE_TTL:
+        logger.info(f"kinoafisha: возвращаю кэш {url} ({len(_kinoafisha_cache[url])} фильмов)")
+        return _kinoafisha_cache[url]
 
     try:
         from bs4 import BeautifulSoup
@@ -556,9 +557,9 @@ async def fetch_kinoafisha_premieres(url: str = "https://www.kinoafisha.info/rel
         logger.info(f"kinoafisha: спарсено {len(unique)} фильмов с {url}")
 
         if unique:
-            _kinoafisha_cache = unique
+            _kinoafisha_cache[url] = unique
             import time as _time2
-            _kinoafisha_cache_time = _time2.time()
+            _kinoafisha_cache_time[url] = _time2.time()
 
         return unique
 
@@ -580,6 +581,30 @@ async def fetch_kinoafisha_all() -> dict[str, list]:
 
 
 _used_kinoafisha_ids: set = set()
+_USED_IDS_FILE = "used_kinoafisha_ids.json"
+
+
+def _load_used_ids():
+    """Загружает список показанных фильмов из файла при старте."""
+    global _used_kinoafisha_ids
+    try:
+        if os.path.exists(_USED_IDS_FILE):
+            with open(_USED_IDS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                _used_kinoafisha_ids = set(data)
+                logger.info(f"Загружено {len(_used_kinoafisha_ids)} показанных фильмов из {_USED_IDS_FILE}")
+    except Exception as e:
+        logger.warning(f"Не удалось загрузить {_USED_IDS_FILE}: {e}")
+        _used_kinoafisha_ids = set()
+
+
+def _save_used_ids():
+    """Сохраняет список показанных фильмов в файл."""
+    try:
+        with open(_USED_IDS_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(_used_kinoafisha_ids), f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning(f"Не удалось сохранить {_USED_IDS_FILE}: {e}")
 
 
 def _pick_kinoafisha(movies: list, genre_filter: str = None) -> dict:
@@ -596,7 +621,9 @@ def _pick_kinoafisha(movies: list, genre_filter: str = None) -> dict:
             return m
 
     # Все показаны — сбрасываем
+    logger.info("_pick_kinoafisha: все фильмы показаны, сбрасываю историю")
     _used_kinoafisha_ids.clear()
+    _save_used_ids()
     return movies[0] if movies else {}
 
 
@@ -643,6 +670,7 @@ async def generate_kinoafisha_film_post() -> tuple[str, str]:
     if not movie:
         return await _generate_gpt_film_post(), ""
     _used_kinoafisha_ids.add(movie.get("movie_url", movie.get("title")))
+    _save_used_ids()
     return _build_kinoafisha_post(movie, "🎬", "#кино #новинка #фильм #кислородпродакшен")
 
 
@@ -660,6 +688,7 @@ async def generate_kinoafisha_cartoon_post() -> tuple[str, str]:
     if not movie:
         return await _generate_gpt_cartoon_post(), ""
     _used_kinoafisha_ids.add(movie.get("movie_url", movie.get("title")))
+    _save_used_ids()
     return _build_kinoafisha_post(movie, "🎨", "#мультфильм #анимация #кислородпродакшен")
 
 
@@ -676,6 +705,7 @@ async def generate_kinoafisha_premiere_post() -> tuple[str, str]:
     if not movie:
         return await _generate_gpt_film_post(), ""
     _used_kinoafisha_ids.add(movie.get("movie_url", movie.get("title")))
+    _save_used_ids()
     return _build_kinoafisha_post(movie, "🔥", "#премьера #новинка #кино #кислородпродакшен")
 
 
@@ -3399,6 +3429,7 @@ async def myfilm_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 def main():
     logger.info("=== KISLOROD AI Bot starting ===")
+    _load_used_ids()  # Загружаем историю показанных фильмов
     logger.info(f"BOT_TOKEN:         {'✅' if BOT_TOKEN        else '❌ НЕ ЗАДАН'}")
     logger.info(f"YANDEX_API_KEY:    {'✅' if YANDEX_API_KEY   else '❌ НЕ ЗАДАН'}")
     logger.info(f"YANDEX_FOLDER_ID:  {YANDEX_FOLDER_ID         or '❌ НЕ ЗАДАН'}")
