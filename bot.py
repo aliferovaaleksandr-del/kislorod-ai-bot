@@ -3573,7 +3573,275 @@ def main():
 
     logger.info("=== Расписание запущено. Bot работает! ===")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
-
+import httpx
+from bs4 import BeautifulSoup
+import random
+ 
+# Разделы Афиши с эмодзи и хэштегами
+AFISHA_SECTIONS = {
+    "news":         ("https://daily.afisha.ru/news/",         "📰", "#новости #афиша"),
+    "cinema":       ("https://daily.afisha.ru/cinema/",       "🎬", "#кино #афиша #кинопремьера"),
+    "cities":       ("https://daily.afisha.ru/cities/",       "🏙", "#город #афиша #куда пойти"),
+    "eating":       ("https://daily.afisha.ru/eating/",       "🍽", "#еда #рестораны #афиша"),
+    "culture":      ("https://daily.afisha.ru/culture/",      "🎭", "#культура #афиша #искусство"),
+    "beauty":       ("https://daily.afisha.ru/beauty/",       "✨", "#красота #афиша"),
+    "music":        ("https://daily.afisha.ru/music/",        "🎵", "#музыка #афиша #концерты"),
+    "relationship": ("https://daily.afisha.ru/relationship/", "🤝", "#общество #афиша"),
+    "games":        ("https://daily.afisha.ru/games/",        "🎮", "#игры #афиша"),
+    "infoporn":     ("https://daily.afisha.ru/infoporn/",     "🌐", "#интернет #афиша"),
+    "tests":        ("https://daily.afisha.ru/tests/",        "📝", "#тесты #афиша"),
+}
+ 
+# Уже использованные URL статей (чтобы не повторяться)
+_used_afisha_urls: set = set()
+ 
+ 
+async def fetch_afisha_articles(section_key: str, max_articles: int = 10) -> list:
+    """
+    Парсит раздел Афиши и возвращает список статей.
+    Каждая статья: {"title": str, "url": str, "description": str, "image": str}
+    """
+    url, emoji, hashtags = AFISHA_SECTIONS.get(section_key, AFISHA_SECTIONS["news"])
+ 
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+    }
+ 
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            resp = await client.get(url, headers=headers)
+ 
+        if resp.status_code != 200:
+            logger.error(f"Афиша [{section_key}] статус {resp.status_code}")
+            return []
+ 
+        soup = BeautifulSoup(resp.text, "html.parser")
+        articles = []
+ 
+        # Ищем карточки статей — Афиша использует разные классы
+        # Пробуем несколько селекторов
+        cards = (
+            soup.find_all("article") or
+            soup.find_all("div", class_=lambda c: c and "card" in c.lower()) or
+            soup.find_all("a", href=lambda h: h and "/news/" in h or "/cinema/" in h)
+        )
+ 
+        for card in cards[:max_articles * 2]:
+            try:
+                # Заголовок
+                title_tag = (
+                    card.find("h2") or card.find("h3") or
+                    card.find(class_=lambda c: c and "title" in c.lower()) or
+                    card.find("a")
+                )
+                title = title_tag.get_text(strip=True) if title_tag else ""
+                if not title or len(title) < 10:
+                    continue
+ 
+                # URL
+                link_tag = card.find("a", href=True)
+                article_url = ""
+                if link_tag:
+                    href = link_tag["href"]
+                    if href.startswith("http"):
+                        article_url = href
+                    elif href.startswith("/"):
+                        article_url = "https://daily.afisha.ru" + href
+ 
+                if not article_url or article_url in _used_afisha_urls:
+                    continue
+ 
+                # Описание
+                desc_tag = (
+                    card.find("p") or
+                    card.find(class_=lambda c: c and ("desc" in c.lower() or "lead" in c.lower() or "text" in c.lower()))
+                )
+                description = desc_tag.get_text(strip=True) if desc_tag else ""
+ 
+                # Картинка
+                img_tag = card.find("img")
+                image_url = ""
+                if img_tag:
+                    image_url = img_tag.get("src") or img_tag.get("data-src") or ""
+                    if image_url and not image_url.startswith("http"):
+                        image_url = ""
+ 
+                articles.append({
+                    "title": title[:200],
+                    "url": article_url,
+                    "description": description[:400],
+                    "image": image_url,
+                })
+ 
+                if len(articles) >= max_articles:
+                    break
+ 
+            except Exception:
+                continue
+ 
+        logger.info(f"Афиша [{section_key}] найдено {len(articles)} статей")
+        return articles
+ 
+    except Exception as e:
+        logger.error(f"fetch_afisha_articles [{section_key}] error: {e}")
+        return []
+ 
+ 
+async def generate_afisha_post(section_key: str) -> tuple[str, str]:
+    """
+    Парсит Афишу, берёт статью и генерирует пост через YandexGPT.
+    Возвращает (text, image_url).
+    """
+    url, emoji, hashtags = AFISHA_SECTIONS.get(section_key, AFISHA_SECTIONS["news"])
+    articles = await fetch_afisha_articles(section_key)
+ 
+    if not articles:
+        logger.warning(f"Афиша [{section_key}] — нет статей, генерирую через GPT")
+        return await _generate_afisha_gpt_fallback(section_key), ""
+ 
+    # Выбираем случайную непросмотренную статью
+    random.shuffle(articles)
+    article = None
+    for a in articles:
+        if a["url"] not in _used_afisha_urls:
+            article = a
+            break
+ 
+    if not article:
+        _used_afisha_urls.clear()
+        article = articles[0]
+ 
+    _used_afisha_urls.add(article["url"])
+ 
+    # Генерируем пост через YandexGPT
+    section_names = {
+        "news": "новостей", "cinema": "кино", "cities": "городской жизни",
+        "eating": "еды и ресторанов", "culture": "культуры", "beauty": "красоты",
+        "music": "музыки", "relationship": "общества", "games": "игр",
+        "infoporn": "интернета", "tests": "тестов",
+    }
+    section_name = section_names.get(section_key, section_key)
+ 
+    system = (
+        "Ты — редактор Telegram-канала студии КИСЛОРОД ПРОДАКШЕН. "
+        "Пишешь живые, интересные посты на основе материалов Афиши. "
+        "Отвечай ТОЛЬКО текстом поста — без пояснений, без markdown-заголовков."
+    )
+ 
+    user_msg = (
+        f"На основе этого материала с Афиши напиши пост для Telegram-канала:\n\n"
+        f"Раздел: {section_name}\n"
+        f"Заголовок: {article['title']}\n"
+        f"Описание: {article['description'] or 'не указано'}\n"
+        f"Ссылка: {article['url']}\n\n"
+        "Требования:\n"
+        f"— Начни с эмодзи {emoji}\n"
+        "— 100–180 слов, живой стиль\n"
+        "— Добавь мнение или вопрос к читателям\n"
+        f"— Ссылка на оригинал: {article['url']}\n"
+        f"— Хэштеги: {hashtags} #кислородпродакшен"
+    )
+ 
+    text = await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+    return text, article.get("image", "")
+ 
+ 
+async def _generate_afisha_gpt_fallback(section_key: str) -> str:
+    """Генерирует пост через GPT если Афиша недоступна."""
+    url, emoji, hashtags = AFISHA_SECTIONS[section_key]
+    section_names = {
+        "news": "новостей дня", "cinema": "кино и фильмов",
+        "cities": "городской жизни", "eating": "еды и ресторанов",
+        "culture": "культуры и искусства", "beauty": "красоты",
+        "music": "музыки", "relationship": "общества",
+        "games": "игр", "infoporn": "интернет-трендов",
+    }
+    topic = section_names.get(section_key, section_key)
+    system = "Ты — редактор Telegram-канала. Отвечай ТОЛЬКО текстом поста."
+    user_msg = (
+        f"Напиши пост о {topic} для Telegram-канала.\n"
+        f"Начни с {emoji}, 100–150 слов, вопрос читателям.\n"
+        f"Хэштеги: {hashtags} #кислородпродакшен"
+    )
+    return await ask_yandex_gpt(system, [{"role": "user", "text": user_msg}])
+ 
+ 
+# ─────────────────────────────────────────────
+# JOB FUNCTIONS — РАСПИСАНИЕ ДЛЯ АФИШИ
+# Добавь эти функции в bot.py
+# ─────────────────────────────────────────────
+ 
+async def job_afisha_cinema(context):
+    """Кино с Афиши — оба канала"""
+    text, img = await generate_afisha_post("cinema")
+    await send_post(context.bot, CHANNEL_KISLOROD, text, img)
+    await send_post(context.bot, CHANNEL_ACTOR, text, img)
+ 
+ 
+async def job_afisha_news(context):
+    """Новости с Афиши — КИСЛОРОД"""
+    text, img = await generate_afisha_post("news")
+    await send_post(context.bot, CHANNEL_KISLOROD, text, img)
+ 
+ 
+async def job_afisha_culture(context):
+    """Культура с Афиши — КИСЛОРОД"""
+    text, img = await generate_afisha_post("culture")
+    await send_post(context.bot, CHANNEL_KISLOROD, text, img)
+ 
+ 
+async def job_afisha_music(context):
+    """Музыка с Афиши — актёрский канал"""
+    text, img = await generate_afisha_post("music")
+    await send_post(context.bot, CHANNEL_ACTOR, text, img)
+ 
+ 
+async def job_afisha_random(context):
+    """Случайный раздел Афиши"""
+    section = random.choice(["news", "cinema", "culture", "music", "cities", "eating"])
+    text, img = await generate_afisha_post(section)
+    channel = random.choice([CHANNEL_KISLOROD, CHANNEL_ACTOR])
+    await send_post(context.bot, channel, text, img)
+ 
+ 
+# ─────────────────────────────────────────────
+# ADMIN КОМАНДЫ — добавь в main()
+# ─────────────────────────────────────────────
+ 
+# app.add_handler(CommandHandler("afisha_now", afisha_now_command))
+# app.add_handler(CommandHandler("afisha_cinema", afisha_cinema_command))
+ 
+async def afisha_now_command(update, context):
+    """Ручная публикация с Афиши — /afisha_now cinema|news|culture|music|..."""
+    args = context.args
+    section = args[0] if args else "cinema"
+    if section not in AFISHA_SECTIONS:
+        sections_list = ", ".join(AFISHA_SECTIONS.keys())
+        await update.message.reply_text(
+            f"❌ Неверный раздел.\n\nДоступные: {sections_list}\n\n"
+            "Пример: /afisha_now cinema"
+        )
+        return
+    url, emoji, _ = AFISHA_SECTIONS[section]
+    await update.message.reply_text(f"⏳ Парсю Афишу [{section}]...")
+    text, img = await generate_afisha_post(section)
+    await send_post(context.bot, CHANNEL_KISLOROD, text, img)
+    await send_post(context.bot, CHANNEL_ACTOR, text, img)
+    await update.message.reply_text(f"✅ Пост с Афиши [{section}] опубликован!")
+ 
+ 
+# ─────────────────────────────────────────────
+# В РАСПИСАНИЕ (main) ДОБАВЬ:
+# ─────────────────────────────────────────────
+# app.job_queue.run_daily(job_afisha_cinema,  time=dtime(9, 0))   # 12:00 МСК
+# app.job_queue.run_daily(job_afisha_news,    time=dtime(6, 30))  # 09:30 МСК
+# app.job_queue.run_daily(job_afisha_culture, time=dtime(13, 0))  # 16:00 МСК
+# app.job_queue.run_daily(job_afisha_music,   time=dtime(15, 0))  # 18:00 МСК
+# app.job_queue.run_daily(job_afisha_random,  time=dtime(11, 0))  # 14:00 МСК
 
 if __name__ == "__main__":
     main()
